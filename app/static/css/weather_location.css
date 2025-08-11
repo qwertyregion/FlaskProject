@@ -1,0 +1,46 @@
+
+.weather-location-container {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    display: flex;
+    gap: 40px;
+    flex: 1;
+    border-radius: 10px;
+}
+
+.weather-container {
+    max-width: 400px;
+    max-high: 400px;
+    margin: 10px auto;
+    padding: 20px;
+    background-color: #FFDEAD;
+    border-radius: 10px;
+    flex: 1;
+}
+
+.location-container {
+    max-width: 400px;
+    margin: 10px auto;
+    padding: 20px;
+    background-color: #BC8F8F;
+    border-radius: 10px;
+    flex: 1;
+}
+
+.weather-icon {
+    font-size: 50px;
+    margin: 10px 0;
+}
+
+.temperature {
+    font-size: 48px;
+    font-weight: bold;
+}
+
+.details {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 20px;
+}
+
+
