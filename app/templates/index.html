@@ -1,8 +1,55 @@
 {% extends 'base.html' %}
 
+{% block link %}
+<link href="{{ url_for('static', filename='css/weather_location.css') }}" rel="stylesheet">
+{% endblock %}
 
 {% block content %}
 
-<p>содержимое главной страницы</p>
+<h1>Привет, {{ current_user.username }}!</h1>
+    {% if current_user.is_authenticated %}
+        <a href="{{ url_for('logout') }}">Выйти</a>
+    {% else %}
+        <a href="{{ url_for('login') }}">Войти</a>
+    {% endif %}
+<h1 style="text-align: center; font-size: 60px"> главная страница </h1>
+
+
+<div class="weather-location-container">
+    <div  class="weather-container">
+        <h1> погода в {{ weather.name }} </h1>
+        <div class="weather-icon">
+            <img src="http://openweathermap.org/img/wn/{{ weather.icon }}@2x.png"
+         alt="{{ weather.conditions }}">
+            {% if weather.icon == 'sun' %}
+                ☀️
+            {% elif weather.icon == 'cloud' %}
+                ☁️
+            {% elif weather.icon == '04d' %}
+                🌧️
+            {% else %}
+                🌡️
+            {% endif %}
+        </div>
+        <div class="temperature">{{ weather.main_temp }}°C</div>
+        <div class="conditions">{{ weather.description|capitalize }}</div>
+        <div class="details">
+            <div>Влажность: {{ weather.main_humidity }}%</div>
+            <div>Ветер: {{ weather.wind_speed }} м/с</div>
+            <div>давление: {{ weather.main_pressure }} Гпа</div>
+            <div>видимости: {{ weather.visibility }} м</div>
+        </div>
+    </div>
+    <div class="location-container">
+        <h1> геоданные </h1>
+        <div> долгота: {{ location.longitude }} </div>
+        <div> широта: {{ location.latitude }} </div>
+        <div> регион: {{ location.region }} </div>
+        <div>  ip: {{ location.ip }} </div>
+        <div>  почтовый индекс: {{ location.postal }} </div>
+        <div> провайдер: {{ location.org }} </div>
+    </div>
+</div>
+
 
 {% endblock %}

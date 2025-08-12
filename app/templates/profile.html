@@ -1,10 +1,51 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
-</head>
-<body>
-$END$
-</body>
-</html>
+
+{% extends 'base.html' %}
+
+{% block link %} <link href="{{ url_for('static', filename='css/profile.css')}}" rel="stylesheet">  {% endblock link %}
+
+{% block style %}{% endblock %}
+
+{% block content %}
+    <div class="profile_container">
+        <div>
+            <h1 class="profile_head"> добро пожжаловать {{ data.username }} </h1>
+        </div>
+        <div>
+            <h3> id пользователя в базе данных --- {{ data.id }} </h3>
+            <h3> ты зарегистрирован как --- {{ data.username }} </h3>
+            <h3> твоя почта --- {{ data.email }} </h3>
+            <h3> а это хэш пароля --- {{ data.password_hash }} </h3>
+        </div>
+
+    </div>
+    <div class="profile_form">
+        <form method="POST" action="{{ url_for('profile', username=current_user.username)}}">
+            {{ form.hidden_tag() }}
+<!--            <input type="hidden" name="_method" value="PUT">-->
+            <div class="mb-3">
+                {{ form.username.label(class="form-label") }}
+                {{ form.username(class="form-control") }}
+                {% if form.username.errors %}
+                    <div class="text-danger">
+                        {% for error in form.username.errors %}
+                            <small>{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="mb-3">
+                {{ form.email.label(class="form-label") }}
+                {{ form.email(class="form-control") }}
+                {% if form.email.errors %}
+                    <div class="text-danger">
+                        {% for error in form.email.errors %}
+                            <small>{{ error }}</small>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <button type="submit" class="btn btn-primary w-100"> изменить </button>
+        </form>
+    </div>
+{% endblock %}
+

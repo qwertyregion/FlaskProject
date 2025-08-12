@@ -1,0 +1,19 @@
+/* Собственные стили */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding-top: 56px; /* Для фиксированной навбара */
+        }
+        .navbar-brand {
+            font-weight: 600;
+        }
+        .hero-section {
+            background: #f8f9fa;
+            padding: 80px 0;
+            margin-bottom: 30px;
+        }
+        footer {
+            background: #343a40;
+            color: white;
+            padding: 20px 0;
+            margin-top: 50px;
+        }

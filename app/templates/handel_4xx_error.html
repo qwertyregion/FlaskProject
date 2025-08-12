@@ -5,14 +5,17 @@
     <title>page_not_found</title>
     <style> .error {
         text-align: center;
-        font-size: 70px;
+        font-size: 50px;
         font-family: Arial, sans-serif;
         color: #FF0000;
         }
     </style>
 </head>
 <body>
-    <h1 class="error"> page not found </h1>
-    <h1 class="error"> error 404 </h1>
+    <div class="error">
+        <h1> {{ error_description }} </h1>
+        <h1> {{ error_name }} {{ error_code }} </h1>
+        <a href="{{ url_for('index') }}">На главную</a>
+    </div>
 </body>
 </html>
