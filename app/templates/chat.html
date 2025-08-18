@@ -1,10 +1,166 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
-</head>
-<body>
-$END$
-</body>
-</html>
+{% extends "base.html" %}
+{% block script %}
+     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+{% endblock script %}
+{% block style %}
+    <style>
+        #chat-box { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; }
+        #users-list { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+    </style>
+{% endblock style %}
+{% block content %}
+
+    <h1>Общий чат</h1>
+
+    <div id="users-list">
+        <h3>Участники: (<span id="online-count">0</span>):</h3>
+        <ul id="active-users"></ul>
+    </div>
+
+    <div id="chat-box"></div>
+
+    <form id="message-form">
+        <input type="text" id="message-input" placeholder="Сообщение" required>
+        <button type="submit">Отправить</button>
+    </form>
+
+    <script>
+
+        const socket = io();
+        const currentUser = {
+            id: "{{ current_user.id }}",
+            username: "{{ current_user.username }}"
+        };
+
+        // При подключении к чату
+        socket.on('connect', () => {
+            socket.emit('join_chat', {room: 'general_chat'});
+        });
+
+        // Получаем список всех пользователей в комнате
+        socket.on('current_users', (data) => {
+            try {
+                console.log('Получены данные о пользователях:', data);
+
+                const usersList = document.getElementById('active-users');
+                if (!usersList) {
+                    console.error('Элемент active-users не найден');
+                    return;
+                }
+
+                usersList.innerHTML = '';
+
+                // Проверяем и нормализуем данные
+                const users = data.users || {};
+                const currentUserId = String(currentUser.id);
+
+                Object.entries(users).forEach(([userId, username]) => {
+                    const userElement = document.createElement('li');
+                    userElement.id = `user-${userId}`;
+                    userElement.textContent = username || 'Неизвестный';
+
+                    if (String(userId) === currentUserId) {
+                        userElement.style.fontWeight = 'bold';
+                        userElement.textContent += ' (Вы)';
+                    }
+
+                    usersList.appendChild(userElement);
+                });
+
+                updateOnlineCount();
+            } catch (error) {
+                console.error('Ошибка обработки current_users:', error);
+            }
+        });
+
+        // Получение сообщений
+        socket.on('new_message', (data) => {
+            const chatBox = document.getElementById('chat-box');
+            const messageElement = document.createElement('div');
+            messageElement.innerHTML = `<strong>${data.sender_username}:</strong> ${data.content}`;
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+
+        // Когда новый пользователь присоединился
+        socket.on('user_joined', (data) => {
+            // Проверяем, нет ли уже этого пользователя в списке
+            if (!document.getElementById(`user-${data.user_id}`)) {
+                const usersList = document.getElementById('active-users');
+                const userElement = document.createElement('li');
+                userElement.id = `user-${data.user_id}`;
+                userElement.textContent = data.username;
+                usersList.appendChild(userElement);
+                updateOnlineCount();
+
+                // Показываем уведомление о новом пользователе
+                const chatBox = document.getElementById('chat-box');
+                const notification = document.createElement('div');
+                notification.style.color = 'gray';
+                notification.textContent = `${data.username} присоединился к чату`;
+                chatBox.appendChild(notification);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        });
+
+        // Когда пользователь вышел
+        socket.on('user_left', (data) => {
+            const userElement = document.getElementById(`user-${data.user_id}`);
+            if (userElement) {
+                userElement.remove();
+                updateOnlineCount();
+
+                // Показываем уведомление
+                const chatBox = document.getElementById('chat-box');
+                const notification = document.createElement('div');
+                notification.style.color = 'gray';
+                notification.textContent = `${data.username} покинул чат`;
+                chatBox.appendChild(notification);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        });
+
+        // Отправка сообщений
+        document.getElementById('message-form')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput?.value.trim();
+
+            if (message) {
+                socket.emit('send_message', {
+                    message: message,
+                    room: 'general_chat'
+                });
+                messageInput.value = '';
+            }
+        });
+
+        // Вспомогательные функции
+        function updateOnlineCount() {
+            const usersList = document.getElementById('active-users');
+            const countElement = document.getElementById('online-count');
+            if (usersList && countElement) {
+                countElement.textContent = usersList.children.length;
+            }
+        }
+
+        function addNotification(text) {
+            const chatBox = document.getElementById('chat-box');
+            if (!chatBox) return;
+
+            const notification = document.createElement('div');
+            notification.style.color = 'gray';
+            notification.textContent = text;
+            chatBox.appendChild(notification);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+    </script>
+
+
+
+
+
+
+
+{% endblock %}

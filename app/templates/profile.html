@@ -1,7 +1,9 @@
 
 {% extends 'base.html' %}
 
-{% block link %} <link href="{{ url_for('static', filename='css/profile.css')}}" rel="stylesheet">  {% endblock link %}
+{% block link %} <link href="{{ url_for('static', filename='css/profile.css')}}?v={{config['VERSION']}}"
+                       rel="stylesheet">
+{% endblock link %}
 
 {% block style %}{% endblock %}
 
@@ -19,7 +21,7 @@
 
     </div>
     <div class="profile_form">
-        <form method="POST" action="{{ url_for('profile', username=current_user.username)}}">
+        <form method="POST" action="{{ url_for('main.profile', username=current_user.username)}}">
             {{ form.hidden_tag() }}
 <!--            <input type="hidden" name="_method" value="PUT">-->
             <div class="mb-3">
