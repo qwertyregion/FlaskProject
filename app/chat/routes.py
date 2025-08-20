@@ -10,5 +10,5 @@ chat_bp = Blueprint('chat', __name__)
 def chat():
     return render_template('chat.html')
 
-# Обработчики Socket.IO можно регистрировать здесь или в extensions.py
+
 

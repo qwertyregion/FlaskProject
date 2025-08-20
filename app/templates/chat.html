@@ -6,41 +6,107 @@
     <style>
         #chat-box { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; }
         #users-list { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .chat-container { display: flex; gap: 20px; }
+        .sidebar { width: 200px; flex-shrink: 0; }
+        .main-content { flex-grow: 1; }
+        #rooms-list { list-style: none; padding: 0; }
+        .room-item { padding: 5px 10px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .room-item:hover { background-color: #f0f0f0; }
+        .room-item.active { background-color: #e0e0e0; font-weight: bold; }
+        #room-create { margin-top: 10px; display: flex; }
+        #new-room-name { flex-grow: 1; }
     </style>
 {% endblock style %}
 {% block content %}
 
-    <h1>Общий чат</h1>
+    <div class="chat-container">
+        <!-- Боковая панель с комнатами -->
+        <div class="sidebar">
+            <h3>Комнаты</h3>
+            <button onclick="showCreateRoomInput()">+ Создать</button>
+            <ul id="rooms-list"></ul>
+            <!-- Форма для создания комнаты -->
+            <div id="room-create" style="display: none;">
+                <input type="text" id="new-room-name" placeholder="Название комнаты">
+                <button onclick="submitCreateRoom()">OK</button>
+            </div>
+        </div>
 
-    <div id="users-list">
-        <h3>Участники: (<span id="online-count">0</span>):</h3>
-        <ul id="active-users"></ul>
+        <!-- Основное содержимое чата -->
+        <div class="main-content">
+            <h1>Чат: <span id="current-room">general_chat</span></h1> <!-- Отображаем текущую комнату -->
+
+            <div id="users-list">
+                <h3>Участники: (<span id="online-count">0</span>):</h3>
+                <ul id="active-users"></ul>
+            </div>
+
+            <div id="chat-box"></div>
+
+            <form id="message-form">
+                <input type="text" id="message-input" placeholder="Сообщение" required>
+                <button type="submit">Отправить</button>
+            </form>
+        </div>
     </div>
 
-    <div id="chat-box"></div>
-
-    <form id="message-form">
-        <input type="text" id="message-input" placeholder="Сообщение" required>
-        <button type="submit">Отправить</button>
-    </form>
-
     <script>
+         // ------------------------- ИНИЦИАЛИЗАЦИЯ И ПЕРЕМЕННЫЕ ------------------------------
 
         const socket = io();
         const currentUser = {
             id: "{{ current_user.id }}",
             username: "{{ current_user.username }}"
         };
+        let currentRoom = 'general_chat';
 
-        // При подключении к чату
+        // -------------------------- ОБРАБОТЧИКИ СОБЫТИЙ SOCKET.IO -----------------------------------
+
         socket.on('connect', () => {
-            socket.emit('join_chat', {room: 'general_chat'});
+            socket.emit('get_rooms'); // Запрашиваем список комнат у сервера
+            // Присоединение к комнате по умолчанию теперь происходит в initChat()
+            initChat();
+        });
+
+        socket.on('room_list', (data) => {
+            const roomListElement = document.getElementById('rooms-list');
+            if (roomListElement) {
+                roomListElement.innerHTML = ''; // Очищаем список
+
+                data.rooms.forEach(roomName => {
+                    const li = document.createElement('li');
+                    li.textContent = roomName;
+                    li.className = 'room-item';
+                    if (roomName === currentRoom) {
+                        li.classList.add('active');
+                    }
+                    li.addEventListener('click', () => {
+                        if (roomName !== currentRoom) {
+                            switchRoom(roomName); // Используем отдельную функцию для смены комнаты
+                        }
+                    });
+                    roomListElement.appendChild(li);
+                });
+
+                // Опционально: добавляем кнопку создания, если список пуст
+                if (data.rooms.length === 0) {
+                    const li = document.createElement('li');
+                    li.textContent = "Нет активных комнат. Создайте первую!";
+                    li.className = 'room-placeholder';
+                    roomListElement.appendChild(li);
+                }
+            }
         });
 
         // Получаем список всех пользователей в комнате
         socket.on('current_users', (data) => {
+            // проверяем, что данные пришли для текущей комнаты (пользователь мог успеть переключиться, пока шёл запрос)
+            if (data.room !== currentRoom) {
+                return;
+            }
+
             try {
-                console.log('Получены данные о пользователях:', data);
+                console.log('Получены данные о пользователях для комнаты', data.room, ':', data.users);
 
                 const usersList = document.getElementById('active-users');
                 if (!usersList) {
@@ -56,7 +122,7 @@
 
                 Object.entries(users).forEach(([userId, username]) => {
                     const userElement = document.createElement('li');
-                    userElement.id = `user-${userId}`;
+                    userElement.id = `user-${userId}-${data.room}`;
                     userElement.textContent = username || 'Неизвестный';
 
                     if (String(userId) === currentUserId) {
@@ -75,72 +141,139 @@
 
         // Получение сообщений
         socket.on('new_message', (data) => {
-            const chatBox = document.getElementById('chat-box');
-            const messageElement = document.createElement('div');
-            messageElement.innerHTML = `<strong>${data.sender_username}:</strong> ${data.content}`;
-            chatBox.appendChild(messageElement);
-            chatBox.scrollTop = chatBox.scrollHeight;
+            // Показываем сообщение только если оно из текущей активной комнаты
+            if (data.room === currentRoom) {
+                addMessageToChat(data);
+            }
         });
 
         // Когда новый пользователь присоединился
         socket.on('user_joined', (data) => {
-            // Проверяем, нет ли уже этого пользователя в списке
-            if (!document.getElementById(`user-${data.user_id}`)) {
-                const usersList = document.getElementById('active-users');
-                const userElement = document.createElement('li');
-                userElement.id = `user-${data.user_id}`;
-                userElement.textContent = data.username;
-                usersList.appendChild(userElement);
-                updateOnlineCount();
-
-                // Показываем уведомление о новом пользователе
-                const chatBox = document.getElementById('chat-box');
-                const notification = document.createElement('div');
-                notification.style.color = 'gray';
-                notification.textContent = `${data.username} присоединился к чату`;
-                chatBox.appendChild(notification);
-                chatBox.scrollTop = chatBox.scrollHeight;
+            if (data.room === currentRoom) {
+                addUserToList(data.user_id, data.username);
+                addNotification(`${data.username} присоединился к чату`);
             }
         });
 
         // Когда пользователь вышел
         socket.on('user_left', (data) => {
-            const userElement = document.getElementById(`user-${data.user_id}`);
+            // Важно: пользователь мог выйти из другой комнаты.
+            // Удаляем его из списка, если он там есть, независимо от комнаты события.
+            const userElement = document.getElementById(`user-${data.user_id}-${currentRoom}`);
             if (userElement) {
                 userElement.remove();
                 updateOnlineCount();
-
-                // Показываем уведомление
-                const chatBox = document.getElementById('chat-box');
-                const notification = document.createElement('div');
-                notification.style.color = 'gray';
-                notification.textContent = `${data.username} покинул чат`;
-                chatBox.appendChild(notification);
-                chatBox.scrollTop = chatBox.scrollHeight;
+                // Показываем уведомление только если событие из текущей комнаты
+                if (data.room === currentRoom) {
+                    addNotification(`${data.username} покинул чат`);
+                }
             }
         });
 
-        // Отправка сообщений
+        // ---------------------------- ОБРАБОТЧИКИ ПОЛЬЗОВАТЕЛЬСКОГО ВВОДА ------------------------------------
+
         document.getElementById('message-form')?.addEventListener('submit', (e) => {
             e.preventDefault();
+            sendMessage();
+        });
+
+        // Опционально: отправка сообщения по Enter (но не в форме создания комнаты)
+        document.getElementById('message-input')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+
+
+        // ----------------------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ -----------------------------------
+
+        // Функция инициализации, вызывается при загрузке или смене комнаты
+        function initChat() {
+            // Очищаем интерфейс текущей комнаты
+            clearChatUI();
+            // Присоединяемся к серверной комнате
+            socket.emit('join_room', { room: currentRoom });
+            // Можно добавить здесь загрузку истории сообщений
+            // loadMessageHistory(currentRoom);
+        }
+
+        function switchRoom(newRoomName) {
+            // Выходим из текущего UI состояния
+            clearChatUI();
+            // Меняем комнату
+            currentRoom = newRoomName;
+            document.getElementById('current-room').textContent = currentRoom;
+            // Выделите новую активную комнату в списке.
+            document.querySelectorAll('.room-item.active').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelectorAll('.room-item').forEach(item => {
+                if (item.textContent === newRoomName) {
+                    item.classList.add('active');
+                }
+            });
+            // Инициализируем новую комнату
+            initChat();
+        }
+
+        function clearChatUI() {
+            // Очищаем чат и список пользователей
+            const chatBox = document.getElementById('chat-box');
+            const usersList = document.getElementById('active-users');
+            if (chatBox) chatBox.innerHTML = '';
+            if (usersList) usersList.innerHTML = '';
+            updateOnlineCount(); // Сбросит счетчик на 0
+        }
+
+        function sendMessage() {
             const messageInput = document.getElementById('message-input');
             const message = messageInput?.value.trim();
 
             if (message) {
                 socket.emit('send_message', {
                     message: message,
-                    room: 'general_chat'
+                    room: currentRoom
                 });
                 messageInput.value = '';
+                // Фокус остаётся на поле ввода для быстрого набора следующего сообщения
+                messageInput.focus();
             }
-        });
+        }
 
-        // Вспомогательные функции
-        function updateOnlineCount() {
+        function addMessageToChat(data) {
+            const chatBox = document.getElementById('chat-box');
+            if (!chatBox) return;
+
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message');
+            // Добавляем timestamp, если он есть в data
+            const timestamp = data.created_at ? new Date(data.created_at).toLocaleTimeString() : '';
+            messageElement.innerHTML = `
+                <strong>${data.sender_username}</strong>
+                ${timestamp ? `<small>[${timestamp}]</small>` : ''}:
+                ${data.content}
+            `;
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function addUserToList(userId, username) {
             const usersList = document.getElementById('active-users');
-            const countElement = document.getElementById('online-count');
-            if (usersList && countElement) {
-                countElement.textContent = usersList.children.length;
+            if (!usersList) return;
+
+            // Проверяем, нет ли уже этого пользователя в списке
+            if (!document.getElementById(`user-${userId}-${currentRoom}`)) {
+                const userElement = document.createElement('li');
+                userElement.id = `user-${userId}-${currentRoom}`;
+                userElement.textContent = username || 'Неизвестный';
+                if (String(userId) === String(currentUser.id)) {
+                    userElement.style.fontWeight = 'bold';
+                    userElement.textContent += ' (Вы)';
+                }
+                usersList.appendChild(userElement);
+                updateOnlineCount();
             }
         }
 
@@ -155,12 +288,38 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
+        function updateOnlineCount() {
+            const usersList = document.getElementById('active-users');
+            const countElement = document.getElementById('online-count');
+            if (usersList && countElement) {
+                countElement.textContent = usersList.children.length;
+            }
+        }
+
+        // -------------------------- ФУНКЦИИ ДЛЯ СОЗДАНИЯ КОМНАТЫ (из HTML) ----------------------------------
+
+        function showCreateRoomInput() {
+            document.getElementById('room-create').style.display = 'flex';
+            document.getElementById('new-room-name').focus();
+        }
+
+        function submitCreateRoom() {
+            const newRoomInput = document.getElementById('new-room-name');
+            const newRoomName = newRoomInput.value.trim();
+
+            if (newRoomName) {
+                // Простая валидация имени комнаты
+                if (newRoomName.length > 20) {
+                    alert('Название комнаты слишком длинное');
+                    return;
+                }
+                switchRoom(newRoomName); // Используем универсальную функцию смены комнаты
+                newRoomInput.value = '';
+                document.getElementById('room-create').style.display = 'none';
+            }
+        }
+
     </script>
-
-
-
-
-
 
 
 {% endblock %}

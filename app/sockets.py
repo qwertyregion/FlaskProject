@@ -6,7 +6,7 @@ from flask_socketio import leave_room, emit, join_room
 from app.extensions import db
 from app.models import Message
 
-active_users = defaultdict(dict)  # {user_id: {'username': str, 'room': str}} # {room: {user_id: username}}
+active_users = defaultdict(dict)  # {room: {user_id: username, }, }
 
 
 def register_socketio_handlers(socketio):
@@ -22,75 +22,109 @@ def register_socketio_handlers(socketio):
 
     @socketio.on('disconnect')
     def handle_disconnect():
-        if current_user.is_authenticated and current_user.id in active_users:
-            if current_user.is_authenticated:
-                # Удаляем пользователя из всех комнат
-                for room, users in active_users.items():
-                    if current_user.id in users:
-                        del users[current_user.id]
-                        emit('user_left', {
-                            'user_id': current_user.id,
-                            'username': current_user.username
-                        }, room=room)
-                current_user.online = False
-                db.session.commit()
-
-    @socketio.on('join_chat')
-    def handle_join(data):
         if not current_user.is_authenticated:
             return
-        room = data.get('room', 'general_chat')
+
+        user_was_in_any_room = False
+
+        # Удаляем пользователя из всех комнат, где он был
+        for room, users in list(active_users.items()):
+            if current_user.id in users:
+                user_was_in_any_room = True
+
+                # Удаляем пользователя и уведомляем комнату
+                del users[current_user.id]
+                emit('user_left', {
+                    'user_id': current_user.id,
+                    'username': current_user.username
+                }, room=room)
+
+                # Если комната пустая, удаляем ее
+                if not users:
+                    del active_users[room]
+
+        # Обновляем статус только если пользователь был в какой-то комнате
+        if user_was_in_any_room:
+            current_user.online = False
+            db.session.commit()
+            print(f"User {current_user.username} disconnected and removed from rooms")
+
+    @socketio.on('join_room')  # join_chat
+    def handle_join_room(data):
+        """Позволяет пользователю войти в указанную комнату, выйдя из предыдущей."""
+        if not current_user.is_authenticated:
+            return
+
+        new_room = data.get('room')
+        if not new_room:
+            return
+
         # Выходим из предыдущих комнат
-        for r in list(active_users.keys()):
-            if current_user.id in active_users[r]:
-                if r != room:
-                    leave_room(r)
-                    del active_users[r][current_user.id]
+        for room_name, users in list(active_users.items()):
+            if current_user.id in users:
+                if room_name != new_room:
+                    leave_room(room_name)
+                    del active_users[room_name][current_user.id]
                     emit('user_left', {
                         'user_id': current_user.id,
                         'username': current_user.username
-                    }, room=r)
+                    }, room=room_name)
+
+                    # Очищаем пустые комнаты
+                    if not active_users[room_name]:
+                        del active_users[room_name]
 
         # Присоединяемся к новой комнате
-        join_room(room)
-        # active_users[current_user.id] = {'username': current_user.username, 'room': room}
-        active_users[room][current_user.id] = current_user.username
+        join_room(new_room)
+        active_users.setdefault(new_room, {})[current_user.id] = current_user.username
         current_user.online = True  # Обновляем статус пользователя
         current_user.ping()
         db.session.commit()
 
         # Логирование для отладки
-        print(f"User {current_user.username} joined room {room}")
-        print(f"Current room users: {active_users[room]}")
+        print(f"User {current_user.username} joined room {new_room}")
+        print(f"Current room users: {active_users[new_room]}")
 
-        # Отправляем новому пользователю ВСЕХ участников комнаты (включая себя)
-        # room_users = {uid: info['username'] for uid, info in active_users.items() if info['room'] == room}  # and uid != current_user.id
+        # Отправляем новому пользователю список участников НОВОЙ комнаты (включая себя)
         emit('current_users', {
-            'users': dict(active_users[room]),  # Преобразуем в обычный dict
-            'room': room
+            'users': dict(active_users[new_room]),  # Преобразуем в обычный dict
+            'room': new_room
         }, broadcast=False, to=request.sid)  # Используем request.sid вместо current_user.id
 
         # Оповещаем других о новом участнике
         emit('user_joined', {
             'user_id': current_user.id,
             'username': current_user.username,
-            'room': room
-        }, room=room, include_self=False)
+            'room': new_room
+        }, room=new_room, include_self=False)
 
     @socketio.on('send_message')
     def handle_message(data):
         if not current_user.is_authenticated:
             return
 
-        room = data.get('room', 'general_chat')
+        room = data.get('room')
+        message_text = data['message']
+
+        if not room:
+            return
+
         message = Message(
-            content=data['message'],
+            content=message_text,
             sender_id=current_user.id,
             recipient_id=None,  # Общий чат (если личные сообщения, то указываем recipient_id)
-            room=room
+            room=room  # Сохраняем название комнаты в базе
         )
         db.session.add(message)
         db.session.commit()
-
         emit('new_message', message.to_dict(), room=room)
+
+        # запрос списка доступных комнат
+        @socketio.on('get_rooms')
+        def handle_get_rooms():
+            """Отправляет клиенту список всех активных комнат (где есть пользователи)."""
+            # Можно расширить, чтобы отдавать и предопределённые комнаты из config
+            room_list = list(active_users.keys())
+            emit('room_list', {'rooms': room_list})
+
 
