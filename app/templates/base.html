@@ -10,7 +10,7 @@
     <link href="{{ url_for('static', filename='css/base.css') }}?v={{config['VERSION']}}" rel="stylesheet">
     {% block link %} {% endblock link %}
     {% block script %} {% endblock script %}
-    {% block style %} <style></style> {% endblock style %}
+    {% block style %} {% endblock style %}
 </head>
 <body>
     <!-- Навигационная панель -->

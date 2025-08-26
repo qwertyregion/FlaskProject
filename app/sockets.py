@@ -6,13 +6,19 @@ from flask_socketio import leave_room, emit, join_room
 from app.extensions import db
 from app.models import Message
 
+
+DEFAULT_ROOM = 'general_chat'
+
 active_users = defaultdict(dict)  # {room: {user_id: username, }, }
+active_users[DEFAULT_ROOM] = {}  # Сразу добавляем постоянную комнату
 
 
 def register_socketio_handlers(socketio):
     @socketio.on('connect')
     def handle_connect():
         if current_user.is_authenticated:
+            join_room('app_aware_clients')  # <- Добавляем эту строку
+
             current_user.online = True
             db.session.commit()
             emit('user_status', {'user_id': current_user.id, 'online': True}, broadcast=True)
@@ -36,11 +42,12 @@ def register_socketio_handlers(socketio):
                 del users[current_user.id]
                 emit('user_left', {
                     'user_id': current_user.id,
-                    'username': current_user.username
+                    'username': current_user.username,
+                    'room': room,
                 }, room=room)
 
                 # Если комната пустая, удаляем ее
-                if not users:
+                if not users and room != DEFAULT_ROOM:
                     del active_users[room]
 
         # Обновляем статус только если пользователь был в какой-то комнате
@@ -48,6 +55,9 @@ def register_socketio_handlers(socketio):
             current_user.online = False
             db.session.commit()
             print(f"User {current_user.username} disconnected and removed from rooms")
+
+            # оповестить всех о новом списке комнат.
+            broadcast_room_list()
 
     @socketio.on('join_room')  # join_chat
     def handle_join_room(data):
@@ -59,6 +69,14 @@ def register_socketio_handlers(socketio):
         if not new_room:
             return
 
+        # Запоминаем комнату, из которой выходим (если она была)
+        old_room = None
+        for room_name, users in list(active_users.items()):
+            if current_user.id in users:
+                if room_name != new_room:
+                    old_room = room_name  # Запоминаем старую комнату
+                    break  # Пользователь может быть только в одной комнате
+
         # Выходим из предыдущих комнат
         for room_name, users in list(active_users.items()):
             if current_user.id in users:
@@ -67,11 +85,12 @@ def register_socketio_handlers(socketio):
                     del active_users[room_name][current_user.id]
                     emit('user_left', {
                         'user_id': current_user.id,
-                        'username': current_user.username
+                        'username': current_user.username,
+                        'room': room_name,
                     }, room=room_name)
 
                     # Очищаем пустые комнаты
-                    if not active_users[room_name]:
+                    if not active_users[room_name] and room_name != DEFAULT_ROOM:
                         del active_users[room_name]
 
         # Присоединяемся к новой комнате
@@ -98,6 +117,9 @@ def register_socketio_handlers(socketio):
             'room': new_room
         }, room=new_room, include_self=False)
 
+        # Рассылаем всем клиентам новый список комнат
+        broadcast_room_list()
+
     @socketio.on('send_message')
     def handle_message(data):
         if not current_user.is_authenticated:
@@ -122,9 +144,23 @@ def register_socketio_handlers(socketio):
         # запрос списка доступных комнат
         @socketio.on('get_rooms')
         def handle_get_rooms():
-            """Отправляет клиенту список всех активных комнат (где есть пользователи)."""
+            """Отправляет клиенту список всех комнат."""
             # Можно расширить, чтобы отдавать и предопределённые комнаты из config
-            room_list = list(active_users.keys())
+            room_list = get_rooms_list()
             emit('room_list', {'rooms': room_list})
 
+
+def broadcast_room_list():
+    """Рассылает актуальный список комнат всем клиентам."""
+    room_list = get_rooms_list()  # Используем новую функцию
+    emit('room_list', {'rooms': room_list}, broadcast=True, namespace='/')
+
+
+def get_rooms_list():
+    """Возвращает список всех комнат: постоянные + активные с пользователями."""
+    # Всегда включаем комнату по умолчанию
+    all_rooms = {DEFAULT_ROOM}
+    # Добавляем все комнаты, где есть пользователи
+    all_rooms.update(active_users.keys())
+    return list(all_rooms)
 
