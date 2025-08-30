@@ -30,7 +30,6 @@ def register_socketio_handlers(socketio):
                 old_sid = connected_users[user_id]
                 if old_sid != request.sid:
                     # Отключаем старое соединение
-                    print(f"Closing duplicate connection for user {current_user.username}")
                     leave_room(DEFAULT_ROOM, sid=old_sid)
                     # Принудительно закрываем старое соединение
                     socketio.server.disconnect(old_sid)
@@ -40,7 +39,6 @@ def register_socketio_handlers(socketio):
             current_user.online = True
             db.session.commit()
             emit('user_status', {'user_id': current_user.id, 'online': True}, broadcast=True)
-            print(f"Пользователь {current_user.username} подключился")
 
             # Автоматически присоединяем к комнате по умолчанию
             join_room(DEFAULT_ROOM)
@@ -59,16 +57,6 @@ def register_socketio_handlers(socketio):
 
             # Отправляем список комнат новому пользователю
             emit('room_list', {'rooms': get_rooms_list()})
-
-            # Оповещаем других о новом участнике
-            # emit('user_joined', {
-            #     'user_id': current_user.id,
-            #     'username': current_user.username,
-            #     'room': DEFAULT_ROOM
-            # }, room=DEFAULT_ROOM, include_self=False)
-
-        else:
-            print("Анонимный пользователь подключился")
 
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -110,7 +98,6 @@ def register_socketio_handlers(socketio):
         if user_was_in_any_room:
             current_user.online = False
             db.session.commit()
-            print(f"User {current_user.username} disconnected and removed from rooms")
             broadcast_room_list()
 
     @socketio.on('create_room')
@@ -174,8 +161,6 @@ def register_socketio_handlers(socketio):
                 'auto_join': False  # Без автоперехода
             }, broadcast=True, include_self=False)
 
-            print(f"Создана новая комната: {room_name} c пользователем {current_user.username}")
-
         except Exception as e:
             print(f"Ошибка при создании комнаты: {e}")
             emit('room_created', {'success': False, 'message': 'Ошибка при создании комнаты'})
@@ -198,7 +183,6 @@ def register_socketio_handlers(socketio):
             room = Room(name=new_room_name, created_by=current_user.id)
             db.session.add(room)
             db.session.commit()
-            print(f"Создана новая комната: {new_room_name}")
 
         # Если комната не существует в active_users, создаем ее
         if new_room_name not in active_users:
@@ -231,9 +215,6 @@ def register_socketio_handlers(socketio):
         current_user.online = True
         current_user.ping()
         db.session.commit()
-
-        print(f"User {current_user.username} joined room {new_room_name}")
-        print(f"Current room users: {active_users[new_room_name]}")
 
         # Отправляем новому пользователю список участников комнаты
         emit('current_users', {
@@ -314,13 +295,66 @@ def register_socketio_handlers(socketio):
                 'is_dm': False,
             }, room=room_name, include_self=False)  # ИСКЛЮЧАЕМ отправителя
 
-            print(f"Сообщение от {current_user.username} в комнате {room}: {message_content}")
-
         except Exception as e:
             print(f"Ошибка при сохранении сообщения: {e}")
             import traceback
             traceback.print_exc()
             db.session.rollback()
+
+    @socketio.on('get_message_history')
+    def handle_get_message_history(data):
+        """Обработчик загрузки истории сообщений комнаты"""
+        if not current_user.is_authenticated:
+            return
+
+        room_name = data.get('room')
+        limit = data.get('limit', 20)  # По умолчанию 20 сообщений
+
+        if not room_name:
+            return
+
+        try:
+            # Находим комнату
+            room = Room.query.filter_by(name=room_name).first()
+            if not room:
+                return
+
+            # Загружаем сообщения с ограничением
+            messages = Message.query.filter_by(
+                room_id=room.id,
+                is_dm=False
+            ).order_by(
+                Message.timestamp.desc()
+            ).limit(limit).all()
+
+            # Преобразуем в правильный порядок (от старых к новым)
+            messages.reverse()
+
+            # Форматируем сообщения для отправки
+            messages_data = []
+            for message in messages:
+                messages_data.append({
+                    'id': message.id,
+                    'sender_id': message.sender_id,
+                    'sender_username': message.sender.username if message.sender else 'Unknown',
+                    'content': message.content,
+                    'timestamp': message.timestamp.isoformat(),
+                    'is_dm': False,
+                    'room': room_name
+                })
+
+            # Отправляем историю клиенту
+            emit('message_history', {
+                'room': room_name,
+                'messages': messages_data,
+                'has_more': len(messages) == limit  # Есть ли еще сообщения
+            })
+
+        except Exception as e:
+            print(f"Ошибка при загрузке истории сообщений: {e}")
+            emit('message_history_error', {
+                'error': 'Не удалось загрузить историю сообщений'
+            })
 
     @socketio.on('start_dm')
     def handle_start_dm(data):
@@ -329,6 +363,7 @@ def register_socketio_handlers(socketio):
             return
 
         recipient_id = data.get('recipient_id')
+        limit = data.get('limit', 20)  # Добавляем ограничение
 
         if not recipient_id:
             return
@@ -344,7 +379,12 @@ def register_socketio_handlers(socketio):
             messages = Message.query.filter(
                 ((Message.sender_id == current_user.id) & (Message.recipient_id == recipient_id)) |
                 ((Message.sender_id == recipient_id) & (Message.recipient_id == current_user.id))
-            ).filter_by(is_dm=True).order_by(Message.timestamp.asc()).all()
+            ).filter_by(is_dm=True).order_by(
+                Message.timestamp.desc()
+            ).all()
+
+            # Преобразуем сообщения в правильном порядке
+            messages.reverse()
 
             # Преобразуем сообщения в словари
             messages_data = []
@@ -364,9 +404,6 @@ def register_socketio_handlers(socketio):
                 'recipient_name': recipient.username,
                 'messages': messages_data
             })
-
-            print(f"Загружена история ЛС между {current_user.username} и {recipient.username}")
-
         except Exception as e:
             print(f"Ошибка при загрузке истории ЛС: {e}")
 
@@ -414,16 +451,30 @@ def register_socketio_handlers(socketio):
                     'conversations': get_dm_conversations(int(recipient_id))
                 }, room=recipient_sid)
 
+                # ОТПРАВЛЯЕМ СИГНАЛ ДЛЯ ОБНОВЛЕНИЯ ИНДИКАТОРА
+                emit('update_unread_indicator', {
+                    'sender_id': current_user.id,
+                    'username': current_user.username
+                }, room=recipient_sid)
+
             # ТАКЖЕ ОБНОВЛЯЕМ СПИСОК ДИАЛОГОВ ОТПРАВИТЕЛЯ
             emit('dm_conversations', {
                 'conversations': get_dm_conversations(current_user.id)
             })
-
-            print(f"ЛС от {current_user.username} к {recipient_id}: {message_content}")
-
         except Exception as e:
             print(f"Ошибка при отправке ЛС: {e}")
             db.session.rollback()
+
+    @socketio.on('update_unread_indicator')
+    def handle_update_unread_indicator(data):
+        """Обработчик для обновления индикатора непрочитанных"""
+        # Этот обработчик будет вызываться на клиенте
+        # Сервер просто пересылает сигнал получателю
+        recipient_id = data.get('recipient_id')
+        if recipient_id:
+            recipient_sid = connected_users.get(int(recipient_id))
+            if recipient_sid:
+                emit('update_unread_indicator', data, room=recipient_sid)
 
     @socketio.on('get_dm_conversations')
     def handle_get_dm_conversations():
@@ -436,9 +487,6 @@ def register_socketio_handlers(socketio):
             emit('dm_conversations', {
                 'conversations': conversations
             })
-
-            print(f"Отправлены диалоги для пользователя {current_user.username}")
-
         except Exception as e:
             print(f"Ошибка при получении диалогов: {e}")
 
@@ -462,13 +510,17 @@ def register_socketio_handlers(socketio):
                 message.is_read = True
 
             db.session.commit()
-            print(f"Сообщения от {sender_id} помечены как прочитанные для {current_user.username}")
 
             # Обновляем список диалогов
             emit('dm_conversations', {
                 'conversations': get_dm_conversations(current_user.id)
             })
 
+            # Отправляем подтверждение
+            emit('messages_marked_read', {
+                'success': True,
+                'sender_id': sender_id
+            })
         except Exception as e:
             print(f"Ошибка при пометке сообщений как прочитанных: {e}")
             db.session.rollback()
@@ -514,7 +566,6 @@ def cleanup_empty_rooms(room_name):
             # Затем удаляем саму комнату
             db.session.delete(room)
             db.session.commit()
-            print(f"Комната {room_name} удалена (пустая)")
 
             # Рассылаем обновленный список комнат
             broadcast_room_list()
@@ -544,13 +595,6 @@ def get_dm_conversations(user_id):
                 ((Message.sender_id == user_id) & (Message.recipient_id == interlocutor_id)) |
                 ((Message.sender_id == interlocutor_id) & (Message.recipient_id == user_id))
             ).filter_by(is_dm=True).order_by(Message.timestamp.desc()).first()
-
-            # Считаем непрочитанные сообщения
-            unread_count = Message.query.filter(
-                (Message.sender_id == interlocutor_id) &
-                (Message.recipient_id == user_id) &
-                (Message.is_read == False)
-            ).count()
 
             # Считаем непрочитанные сообщения (ВАЖНО: только входящие сообщения)
             unread_count = Message.query.filter(

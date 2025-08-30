@@ -7,6 +7,7 @@ let currentDMRecipient = null;
 let isInDMMode = false; // Флаг для отслеживания режима (общий чат / ЛС)
 let isPageUnloading = false;
 let reconnectTimer = null;
+let messageHistoryLoaded = false;  // Добавим в начало файла переменную для отслеживания истории
 
 // Обработчик перед закрытием страницы
 window.addEventListener('beforeunload', () => {
@@ -19,21 +20,27 @@ window.addEventListener('beforeunload', () => {
 // -------------------------- ОБРАБОТЧИКИ СОБЫТИЙ SOCKET.IO -----------------------------------
 
 socket.on('connect', () => {
-    console.log('Подключен к серверу');
     if (isPageUnloading) {
         return; // Не инициализируем чат, если страница закрывается
     }
 
+    // Явно запрашиваем все необходимые данные
     socket.emit('get_rooms'); // Запрашиваем список комнат у сервера
     initChat();  // Присоединение к комнате по умолчанию
     initTabs();
 
     // АВТОМАТИЧЕСКИ ЗАГРУЖАЕМ ДИАЛОГИ ПРИ ПОДКЛЮЧЕНИИ
     loadDMConversations();
+
+    // Явно запрашиваем список пользователей после небольшой задержки
+    setTimeout(() => {
+        if (!isInDMMode) {
+            socket.emit('get_current_users', { room: currentRoom });
+        }
+    }, 500);
 });
 
 socket.on('disconnect', () => {
-    console.log('Отключен от сервера');
     if (!isPageUnloading) {
         // Переподключение через 1 секунду
         clearTimeout(reconnectTimer);
@@ -46,13 +53,11 @@ socket.on('disconnect', () => {
 });
 
 socket.on('room_list', (data) => {
-    console.log('Получен список комнат:', data.rooms);
     updateRoomList(data.rooms);
 });
 
 // Получаем список всех пользователей в комнате
 socket.on('current_users', (data) => {
-    console.log('Данные current_users:', data);
     // проверяем, что данные пришли для текущей комнаты (пользователь мог успеть переключиться, пока шёл запрос)
     if (data.room !== currentRoom || isInDMMode) {
         console.log('Пропускаем - не текущая комната или режим ЛС');
@@ -111,22 +116,18 @@ socket.on('current_users', (data) => {
 
 // Получение сообщений
 socket.on('new_message', (data) => {
-    console.log('Получено новое сообщение:', data);
-
     // Проверяем, что сообщение из текущей комнаты и не ЛС
     if (data.room === currentRoom && !data.is_dm && !isInDMMode) {
         // Пропускаем свои собственные сообщения (они уже отображены локально)
         if (window.currentUser && data.sender_id === window.currentUser.id) {
             console.log('Это наше сообщение, проверяем на дубликат');
         }
-
+        // Добавляем флаг, что это не из истории
+        data.is_history = false;
         addMessageToChat(data);
     } else {
         console.log('Сообщение пропущено:', 'текущая комната:', currentRoom,
                     'комната сообщения:', data.room, 'режим ЛС:', isInDMMode);
-
-
-
     }
 });
 
@@ -135,6 +136,9 @@ socket.on('user_joined', (data) => {
     if (data.room === currentRoom && !isInDMMode) {
         addUserToList(data.user_id, data.username);
         addNotification(`${data.username} присоединился к чату`);
+
+        // Явно запрашиваем обновленный список пользователей
+        socket.emit('get_current_users', { room: currentRoom });
     }
 });
 
@@ -146,6 +150,10 @@ socket.on('user_left', (data) => {
     if (userElement && !isInDMMode) {
         userElement.remove();
         updateOnlineCount();
+
+        // Явно запрашиваем обновленный список пользователей
+        socket.emit('get_current_users', { room: currentRoom });
+
         // Показываем уведомление только если событие из текущей комнаты
         if (data.room === currentRoom) {
             addNotification(`${data.username} покинул чат`);
@@ -154,7 +162,6 @@ socket.on('user_left', (data) => {
 });
 
 socket.on('room_created', (data) => {
-    console.log('Получен ответ о создании комнаты:', data);
     if (data && data.success) {
 
         // Показываем уведомление об успешном создании
@@ -175,46 +182,92 @@ socket.on('room_created', (data) => {
         const roomCreateElement = document.getElementById('room-create');
         if (roomCreateElement && roomCreateElement.classList.contains('active')) {
             showRoomError(errorMessage);
+            // Показываем форму снова при ошибке
+            roomCreateElement.classList.add('active');
         }
     }
+});
+
+// Обработчик получения истории сообщений
+socket.on('message_history', (data) => {
+    // Проверяем, что история для текущей комнаты
+    if (data.room === currentRoom && !isInDMMode) {
+        const chatBox = document.getElementById('chat-box');
+        if (!chatBox) return;
+
+        // Очищаем чат перед добавлением истории
+        chatBox.innerHTML = '';
+
+        // Добавляем все сообщения из истории
+        data.messages.forEach(message => {
+            addMessageToChat(message);
+        });
+
+        messageHistoryLoaded = true;
+
+        // Прокручиваем вниз к последнему сообщению
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+});
+
+socket.on('message_history_error', (data) => {
+    console.error('Ошибка загрузки истории:', data.error);
+    addNotification('Не удалось загрузить историю сообщений');
 });
 
 // ---------------------------- Обработчики для личных сообщений ----------------------------
 
 // Обработчик для обновления списка диалогов
 socket.on('dm_conversations', (data) => {
-    console.log('Получены диалоги:', data.conversations);
-
     // Проверяем, есть ли непрочитанные сообщения
     const hasUnread = data.conversations.some(conv => conv.unread_count > 0);
-    console.log('Есть непрочитанные сообщения:', hasUnread);
 
     renderDMConversations(data.conversations);
 });
 
-socket.on('new_dm', (data) => {
-    console.log('Получено новое ЛС:', data);
+// Обработчик для принудительного обновления диалогов
+socket.on('update_dm_conversations', () => {
+    console.log('Принудительное обновление диалогов');
+    loadDMConversations();
+});
 
+// Обработчик для обновления индикатора непрочитанных
+socket.on('update_unread_indicator', (data) => {
+    console.log('Обновление индикатора для отправителя:', data.sender_id);
+    updateUnreadIndicator(data.sender_id, data.username);
+});
+
+// Обработчик подтверждения пометки как прочитанного
+socket.on('messages_marked_read', (data) => {
+    if (data.success) {
+        console.log('Сообщения помечены как прочитанные для отправителя:', data.sender_id);
+        // Обновляем список диалогов
+        loadDMConversations();
+    }
+});
+
+socket.on('new_dm', (data) => {
     // Проверяем, что это сообщение для текущего диалога
     const isForCurrentDM = currentDMRecipient &&
         (currentDMRecipient == data.sender_id || currentDMRecipient == data.recipient_id);
 
     if (isForCurrentDM) {
-        console.log('Отображаем ЛС в текущем диалоге');
         addDMMessage(data);
+
+        // Если это текущий диалог, помечаем как прочитанное
+        socket.emit('mark_messages_as_read', { sender_id: data.sender_id });
     } else {
-        console.log('ЛС не для текущего диалога, показываем уведомление');
         // Показать уведомление о новом сообщении
         showDMNotification(data);
-//        updateUnreadCount(data.sender_id);
+        updateUnreadCount(data.sender_id);
 
         // АВТОМАТИЧЕСКИ ОБНОВЛЯЕМ СПИСОК ДИАЛОГОВ ПРИ НОВОМ СООБЩЕНИИ
         loadDMConversations();
     }
 });
 
+// получение истории личных сообщений
 socket.on('dm_history', (data) => {
-    console.log('Получена история ЛС:', data);
     clearChatUI();
     currentDMRecipient = data.recipient_id;
     isInDMMode = true;
@@ -248,7 +301,22 @@ socket.on('user_offline', (data) => {
 // ---------------------------- ОБРАБОТЧИКИ ПОЛЬЗОВАТЕЛЬСКОГО ВВОДА ------------------------------------
 
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Проверка элементов...');
+
+    const elementsToCheck = [
+        { id: 'room-create', name: 'Форма создания комнаты' },
+        { id: 'new-room-name', name: 'Поле ввода названия' },
+        { id: 'dm-modal', name: 'Модальное окно ЛС' }
+    ];
+
+    elementsToCheck.forEach(item => {
+        const element = document.getElementById(item.id);
+        console.log(`${item.name}:`, element ? '✅ Найден' : '❌ Не найден');
+    });
+
     const messageForm = document.getElementById('message-form');
+    initScrollHandler();
+
     if (messageForm) {
         messageForm.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -289,21 +357,57 @@ function addEnterHandler(inputId, callback) {
 
 // ----------------------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ -----------------------------------
 
+// Функция загрузки истории сообщений
+function loadMessageHistory(roomName) {
+    socket.emit('get_message_history', {
+        room: roomName,
+        limit: 20
+    });
+}
+
+// Добавим обработчик для подгрузки истории при прокрутке вверх
+function initScrollHandler() {
+    const chatBox = document.getElementById('chat-box');
+    if (chatBox) {
+        chatBox.addEventListener('scroll', () => {
+            // Если прокрутили до верха, можно добавить загрузку более старых сообщений
+            if (chatBox.scrollTop === 0 && messageHistoryLoaded) {
+                console.log('Пользователь прокрутил к началу - можно добавить загрузку более старых сообщений');
+                // Здесь можно реализовать пагинацию
+            }
+        });
+    }
+}
+
 // Функция инициализации, вызывается при загрузке или смене комнаты
 function initChat() {
     clearChatUI();  // Очищаем интерфейс текущей комнаты
+
     if (!isInDMMode) {
         socket.emit('join_room', { room: currentRoom });  // Присоединяемся к серверной комнате
-    }
 
-    // Можно добавить здесь загрузку истории сообщений
-    // loadMessageHistory(currentRoom);
+        // Запрашиваем список пользователей в комнате
+        socket.emit('get_current_users', { room: currentRoom });
+
+        // Запрашиваем список комнат
+        socket.emit('get_rooms');
+
+        // Загружаем историю сообщений только если еще не загружали
+        if (!messageHistoryLoaded) {
+            loadMessageHistory(currentRoom);
+        }
+    }
 }
 
 function switchToRoom(roomName) {
     isInDMMode = false;
     currentDMRecipient = null;
-    clearChatUI();  // Выходим из текущего UI состояния
+    messageHistoryLoaded = false; // Сбрасываем флаг при смене комнаты
+
+    // Очищаем только чат, сохраняя списки
+    const chatBox = document.getElementById('chat-box');
+    if (chatBox) chatBox.innerHTML = '';
+
     currentRoom = roomName;  // Меняем комнату
     document.getElementById('current-room').textContent = currentRoom;
 
@@ -324,7 +428,13 @@ function switchToRoom(roomName) {
     });
 
     switchToRoomsTab();  // Переключаемся на вкладку комнат
-    initChat();  // Инициализируем новую комнату
+    initChat();  // Инициализируем чат с явным запросом всех данных
+
+    // Дополнительно запрашиваем данные после смены комнаты
+    setTimeout(() => {
+        socket.emit('get_rooms');
+        socket.emit('get_current_users', { room: currentRoom });
+    }, 100);
 }
 
 function switchToDMTab() {
@@ -363,11 +473,9 @@ function switchToRoomsTab() {
 }
 
 function clearChatUI() {
-    // Очищаем чат и список пользователей
+    // Очищаем только чат
     const chatBox = document.getElementById('chat-box');
-    const usersList = document.getElementById('active-users');
     if (chatBox) chatBox.innerHTML = '';
-    if (usersList) usersList.innerHTML = '';
     updateOnlineCount(); // Сбросит счетчик на 0
 }
 
@@ -402,10 +510,26 @@ function addMessageToChat(data) {
     const chatBox = document.getElementById('chat-box');
     if (!chatBox) return;
 
+    // Проверяем, нет ли уже такого сообщения (по ID или содержанию + времени)
+    const existingMessage = Array.from(chatBox.children).find(msg => {
+        const messageId = msg.getAttribute('data-message-id');
+        return messageId === String(data.id);
+    });
+
+    if (existingMessage && !data.is_local) {
+        console.log('Сообщение уже отображено, пропускаем:', data.id);
+        return;
+    }
+
     const messageElement = document.createElement('div');
     messageElement.classList.add('message');
 
-    // Добавляем timestamp, если он есть в data
+    // Добавляем ID сообщения для проверки дубликатов
+    if (data.id) {
+        messageElement.setAttribute('data-message-id', data.id);
+    }
+
+    // timestamp, если он есть в data
     const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() :
                      data.created_at ? new Date(data.created_at).toLocaleTimeString() : '';
 
@@ -425,7 +549,11 @@ function addMessageToChat(data) {
         `;
     }
     chatBox.appendChild(messageElement);
-    chatBox.scrollTop = chatBox.scrollHeight;
+
+    // Прокручиваем вниз только если это новое сообщение, а не загруженное из истории
+    if (!data.is_history) {
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
 }
 
 function addUserToList(userId, username) {
@@ -466,8 +594,6 @@ function addUserToList(userId, username) {
 
         usersList.appendChild(userElement);
         updateOnlineCount();
-
-        console.log('Пользователь добавлен в список:', username);
     }
 }
 
@@ -492,6 +618,30 @@ function updateOnlineCount() {
     }
 }
 
+// Функция для принудительного обновления всех списков
+function refreshAllLists() {
+    socket.emit('get_rooms');
+
+    if (!isInDMMode) {
+        socket.emit('get_current_users', { room: currentRoom });
+    }
+
+    loadDMConversations();
+}
+
+// Можно добавить кнопку обновления в интерфейс
+document.addEventListener('DOMContentLoaded', function() {
+    // Добавляем кнопку обновления (опционально)
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = '🔄';
+    refreshBtn.style.position = 'absolute';
+    refreshBtn.style.top = '10px';
+    refreshBtn.style.right = '10px';
+    refreshBtn.style.zIndex = '1000';
+    refreshBtn.onclick = refreshAllLists;
+    document.body.appendChild(refreshBtn);
+});
+
 // ----------------------------------- Функции для работы с DM -------------------------------
 
 // Пользователь ищет или выбирает из списка контактов
@@ -500,7 +650,6 @@ function selectUserForDM(userId, username) {
 }
 
 function loadDMConversations() {
-    console.log('Загрузка диалогов ЛС...');
     socket.emit('get_dm_conversations');
 }
 
@@ -516,8 +665,6 @@ function renderDMConversations(conversations) {
     }
 
     conversations.forEach(conv => {
-        console.log('Диалог с', conv.username, 'непрочитанных:', conv.unread_count);
-
         const li = document.createElement('li');
         li.className = 'dm-conversation';
         li.setAttribute('data-user-id', conv.user_id);
@@ -601,14 +748,10 @@ function renderDMConversations(conversations) {
 }
 
 function startDMWithUser(userId, username) {
-    console.log('startDMWithUser вызван с:', userId, username);
-
     if (window.currentUser && String(userId) === String(window.currentUser.id)) {
         addNotification('Нельзя отправлять сообщения самому себе');
         return;
     }
-
-    console.log('Начинаем ЛС с пользователем:', username, 'ID:', userId);
 
     // Закрываем другие модальные окна
     hideCreateRoomInput();
@@ -631,6 +774,13 @@ function startDMWithUser(userId, username) {
     const currentConversation = document.querySelector(`.dm-conversation[data-user-id="${userId}"]`);
     if (currentConversation) {
         currentConversation.classList.add('active');
+        currentConversation.classList.remove('has-unread');
+
+        // Убираем badge непрочитанных
+        const badge = currentConversation.querySelector('.unread-badge');
+        if (badge) {
+            badge.remove();
+        }
     }
 
     // Очищаем чат перед загрузкой новых сообщений
@@ -675,8 +825,6 @@ function sendDM() {
     const message = messageInput?.value.trim();
 
     if (message) {
-        console.log('Отправка ЛС получателю:', currentDMRecipient, 'сообщение:', message);
-
         socket.emit('send_dm', {
             recipient_id: currentDMRecipient,
             message: message,
@@ -692,14 +840,10 @@ function sendDM() {
         });
 
         messageInput.value = '';
-    } else {
-        console.log('Пустое сообщение ЛС');
     }
 }
 
 function addDMMessage(message) {
-    console.log('Добавление ЛС в чат:', message);
-
     const chatBox = document.getElementById('chat-box');
     if (!chatBox) {
         console.error('Chat box not found for DM');
@@ -735,8 +879,6 @@ function showDMNotification(message) {
         });
     }
 
-    console.log('Новое ЛС от', message.sender_username, ':', message.content);
-
     // Показать уведомление в интерфейсе
     const notification = document.createElement('div');
     notification.className = 'dm-notification';
@@ -750,19 +892,39 @@ function showDMNotification(message) {
     }, 5000);
 }
 
-function updateUnreadCount(userId) {
-    const conversation = document.querySelector(`.dm-conversation[data-user-id="${userId}"]`);
+function updateUnreadCount(senderId, username) {
+    console.log('Обновление индикатора непрочитанных для:', username, senderId);
+
+    // Находим диалог с этим пользователем
+    const conversation = document.querySelector(`.dm-conversation[data-user-id="${senderId}"]`);
+
     if (conversation) {
+        // Добавляем класс непрочитанного
+        conversation.classList.add('has-unread');
+
+        // Обновляем счетчик
         const badge = conversation.querySelector('.unread-badge');
-        const count = parseInt(badge?.textContent || 0) + 1;
         if (badge) {
-            badge.textContent = count;
+            const currentCount = parseInt(badge.textContent) || 0;
+            badge.textContent = currentCount + 1;
         } else {
-            const userInfo = conversation.querySelector('.dm-user-info');
-            if (userInfo) {
-                userInfo.innerHTML += `<span class="unread-badge">${count}</span>`;
+            // Создаем badge если его нет
+            const unreadIndicator = conversation.querySelector('.unread-indicator');
+            if (unreadIndicator) {
+                unreadIndicator.innerHTML = `<span class="unread-badge">1</span>`;
             }
         }
+
+        // Показываем уведомление
+        showDMNotification({
+            sender_id: senderId,
+            sender_username: username,
+            content: 'Новое сообщение'
+        });
+    } else {
+        console.log('Диалог не найден, загружаем список диалогов');
+        // Если диалога нет, обновляем весь список
+        loadDMConversations();
     }
 }
 
@@ -846,12 +1008,25 @@ function showCreateRoomInput() {
     const roomCreateElement = document.getElementById('room-create');
     const roomInputElement = document.getElementById('new-room-name');
 
-    document.getElementById('dm-modal').style.display = 'none';  // Скрываем другие открытые формы
+    if (!roomCreateElement) {
+        console.error('Элемент room-create не найден');
+        return;
+    }
+
+    // Скрываем другие открытые формы
+    const dmModal = document.getElementById('dm-modal');
+    if (dmModal) {
+        dmModal.style.display = 'none';
+    }
+
     // Показываем форму создания комнаты
+    console.log('Добавляем класс active');
     roomCreateElement.classList.add('active');
     roomCreateElement.classList.remove('invalid');
-    roomInputElement.value = '';
-    roomInputElement.focus();
+     if (roomInputElement) {
+        roomInputElement.value = '';
+        roomInputElement.focus();
+    }
 
     // Добавляем обработчик для скрытия формы при клике вне её
     setTimeout(() => {
@@ -862,6 +1037,11 @@ function showCreateRoomInput() {
 function hideCreateRoomOnClickOutside(e) {
     const roomCreateElement = document.getElementById('room-create');
     const createButton = document.querySelector('#rooms-tab > button');
+
+    // Проверяем, что элементы существуют
+    if (!roomCreateElement || !createButton) {
+        return;
+    }
 
     if (roomCreateElement.classList.contains('active') &&
         !roomCreateElement.contains(e.target) &&
@@ -888,11 +1068,9 @@ function hideCreateRoomInput() {
 }
 
 function submitCreateRoom() {
-    console.log('Создание комнаты...');
     const newRoomInput = document.getElementById('new-room-name');
     const roomCreateElement = document.getElementById('room-create');
     const newRoomName = newRoomInput.value.trim();
-    console.log('Название комнаты:', newRoomName);
 
     if (!newRoomName) {
         showRoomError('Введите название комнаты');
@@ -914,25 +1092,27 @@ function submitCreateRoom() {
     roomCreateElement.classList.remove('invalid');
 
     // Эмитим событие создания комнаты с обработчиком ответа
-    socket.emit('create_room', { room_name: newRoomName }, (response) => {
-        if (response && response.success) {
-            // Анимация успешного создания
-            roomCreateElement.classList.add('room-created');
+    socket.emit('create_room', { room_name: newRoomName });
 
-            // Очищаем поле ввода
-            newRoomInput.value = '';
-
-            // Переключаемся на новую комнату через 1 секунду
-            setTimeout(() => {
-                switchToRoom(newRoomName);
-                hideCreateRoomInput();
-                roomCreateElement.classList.remove('room-created');
-            }, 1000);
-
-            // Показываем уведомление
-            addNotification(response.message || `Комната "${newRoomName}" создана!`);
-        }
-    });
+//    socket.emit('create_room', { room_name: newRoomName }, (response) => {
+//        if (response && response.success) {
+//            // Анимация успешного создания
+//            roomCreateElement.classList.add('room-created');
+//
+//            // Очищаем поле ввода
+//            newRoomInput.value = '';
+//
+//            // Переключаемся на новую комнату через 1 секунду
+//            setTimeout(() => {
+//                switchToRoom(newRoomName);
+//                hideCreateRoomInput();
+//                roomCreateElement.classList.remove('room-created');
+//            }, 1000);
+//
+//            // Показываем уведомление
+//            addNotification(response.message || `Комната "${newRoomName}" создана!`);
+//        }
+//    });
 
     // Сразу скрываем форму после отправки (опционально)
     hideCreateRoomInput();
@@ -965,7 +1145,6 @@ function updateRoomList(rooms) {
         return;
     }
 
-    console.log('Обновление списка комнат:', rooms);
     roomListElement.innerHTML = '';
 
     // Сортируем комнаты: сначала general_chat, потом остальные
@@ -1012,3 +1191,14 @@ document.addEventListener('keydown', (e) => {
         hideCreateRoomInput();
     }
 });
+
+//// Добавим периодическое обновление списков (каждые 30 секунд)
+//setInterval(() => {
+//    if (socket.connected && !isInDMMode) {
+//        socket.emit('get_rooms');
+//        socket.emit('get_current_users', { room: currentRoom });
+//    }
+//}, 30000);
+
+
+
