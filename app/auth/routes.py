@@ -40,14 +40,14 @@ def register():
         existing_user = User.query.filter((User.email == email) | (User.username == username)).first()
         if existing_user:
             flash('Пользователь с таким email или username уже существует', category='info')
-            return redirect(url_for('register'))
+            return redirect(url_for('auth.register'))
         # Создаем нового пользователя
         user = User(username=username, email=email, )
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
         flash('Регистрация прошла успешно! Теперь вы можете войти.', 'success')
-        return redirect(url_for('login'))
+        return redirect(url_for('auth.login'))
     return render_template('register.html', form=form)
 
 

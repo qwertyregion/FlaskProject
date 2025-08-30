@@ -16,21 +16,37 @@
     </script>
 {% endblock script %}
 
-{% block style %}{% endblock style %}
+{% block style %}  {% endblock style %}
 
 {% block content %}
 
     <div class="chat-container">
         <!-- Боковая панель с комнатами -->
         <div class="sidebar">
-            <h3>Комнаты</h3>
-            <button id="create-room-btn" onclick="showCreateRoomInput()">
-                <span>+</span> Создать тему чата
-            </button>
-            <ul id="rooms-list"></ul>
+
+            <div class="sidebar-tabs">
+                <button class="tab-btn active" data-tab="rooms">Комнаты</button>
+                <button class="tab-btn" data-tab="dms">Личные сообщения</button>
+            </div>
+
+            <!-- Список комнат -->
+            <div class="tab-content active" id="rooms-tab">
+                <button onclick="showCreateRoomInput()">+ Создать тему чата</button>
+                <ul id="rooms-list"></ul>
+            </div>
+
+            <!-- Список диалогов -->
+            <div class="tab-content" id="dms-tab">
+                <div class="dm-header">
+                    <h4>Диалоги</h4>
+                </div>
+                <ul id="dm-conversations"></ul>
+            </div>
+
             <!-- Форма для создания комнаты -->
             <div id="room-create">
-                <input type="text" id="new-room-name" placeholder="Название комнаты">
+                <input type="text" id="new-room-name" placeholder="тема чата" required>
+                <div class="error-message"></div>
                 <button onclick="submitCreateRoom()">OK</button>
             </div>
         </div>

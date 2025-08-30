@@ -17,7 +17,6 @@ app_flask.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0       # 31536000 1 год ке
 app_flask.config['VERSION'] = 1.1
 
 if __name__ == "__main__":
-    # print(app_flask.url_map)  # Для отладки маршрутов
 
     socketio.run(
         app_flask,

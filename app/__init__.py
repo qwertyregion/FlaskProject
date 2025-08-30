@@ -19,9 +19,8 @@ def create_app(config_class='config.Config'):
     login_manager.init_app(app)
     migrate = Migrate(app, db)
 
-    # Импортируем модели и сокеты ПОСЛЕ инициализации
+    # Импортируем модели ПОСЛЕ инициализации
     from app import models
-    from app import sockets
 
     # Регистрация Blueprints
     from app.auth.routes import auth_bp
@@ -32,10 +31,16 @@ def create_app(config_class='config.Config'):
     app.register_blueprint(chat_bp)
 
     # Инициализация Socke IO ПОСЛЕ регистрации Blueprints
-    socketio.init_app(app)
+    socketio.init_app(app,
+                      cors_allowed_origins="*",
+                      logger=False,  # Включите для отладки
+                      engineio_logger=False,
+                      ping_timeout=30,  # ← Уменьшите таймауты
+                      ping_interval=10
+                      )
     register_socketio_handlers(socketio)
 
-
+    from app import sockets
 
     # Обработчик для PUT-методов через скрытое поле _method
     @app.before_request

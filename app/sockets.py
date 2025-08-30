@@ -1,28 +1,72 @@
 from collections import defaultdict
-
+from app.models import Room
 from flask import request
 from flask_login import current_user
 from flask_socketio import leave_room, emit, join_room
+from sqlalchemy import func
 from app.extensions import db
-from app.models import Message
-
+from app.models import Message, User
 
 DEFAULT_ROOM = 'general_chat'
 
 active_users = defaultdict(dict)  # {room: {user_id: username, }, }
 active_users[DEFAULT_ROOM] = {}  # Сразу добавляем постоянную комнату
 
+# Храним подключенных пользователей
+connected_users = {}  # {user_id: socket_id}
+dm_rooms = defaultdict(set)  # {dm_room_id: set(socket_ids)}
+
 
 def register_socketio_handlers(socketio):
+    """Регистрирует все обработчики SocketIO"""
+
     @socketio.on('connect')
     def handle_connect():
         if current_user.is_authenticated:
-            join_room('app_aware_clients')  # <- Добавляем эту строку
+            user_id = current_user.id
 
+            # Проверяем, не подключен ли пользователь уже
+            if user_id in connected_users:
+                old_sid = connected_users[user_id]
+                if old_sid != request.sid:
+                    # Отключаем старое соединение
+                    print(f"Closing duplicate connection for user {current_user.username}")
+                    leave_room(DEFAULT_ROOM, sid=old_sid)
+                    # Принудительно закрываем старое соединение
+                    socketio.server.disconnect(old_sid)
+
+            connected_users[current_user.id] = request.sid
+            join_room('app_aware_clients')
             current_user.online = True
             db.session.commit()
             emit('user_status', {'user_id': current_user.id, 'online': True}, broadcast=True)
             print(f"Пользователь {current_user.username} подключился")
+
+            # Автоматически присоединяем к комнате по умолчанию
+            join_room(DEFAULT_ROOM)
+
+            # Убедимся, что комната всегда существует в active_users
+            if DEFAULT_ROOM not in active_users:
+                active_users[DEFAULT_ROOM] = {}
+
+            active_users[DEFAULT_ROOM][current_user.id] = current_user.username
+
+            # Отправляем список пользователей в комнате по умолчанию
+            emit('current_users', {
+                'users': dict(active_users[DEFAULT_ROOM]),
+                'room': DEFAULT_ROOM
+            }, room=DEFAULT_ROOM)
+
+            # Отправляем список комнат новому пользователю
+            emit('room_list', {'rooms': get_rooms_list()})
+
+            # Оповещаем других о новом участнике
+            # emit('user_joined', {
+            #     'user_id': current_user.id,
+            #     'username': current_user.username,
+            #     'room': DEFAULT_ROOM
+            # }, room=DEFAULT_ROOM, include_self=False)
+
         else:
             print("Анонимный пользователь подключился")
 
@@ -31,136 +75,501 @@ def register_socketio_handlers(socketio):
         if not current_user.is_authenticated:
             return
 
+        user_id = current_user.id
         user_was_in_any_room = False
 
         # Удаляем пользователя из всех комнат, где он был
-        for room, users in list(active_users.items()):
-            if current_user.id in users:
+        for room_name, users in list(active_users.items()):
+            if user_id in users:
                 user_was_in_any_room = True
 
                 # Удаляем пользователя и уведомляем комнату
-                del users[current_user.id]
+                del users[user_id]
+                leave_room(room_name)
+
                 emit('user_left', {
-                    'user_id': current_user.id,
+                    'user_id': user_id,
                     'username': current_user.username,
-                    'room': room,
-                }, room=room)
+                    'room': room_name,
+                }, room=room_name)
 
-                # Если комната пустая, удаляем ее
-                if not users and room != DEFAULT_ROOM:
-                    del active_users[room]
+                # Отправляем обновленный список пользователей
+                emit('current_users', {
+                    'users': dict(users),
+                    'room': room_name
+                }, room=room_name)
 
-        # Обновляем статус только если пользователь был в какой-то комнате
+                # ПРОВЕРЯЕМ И УДАЛЯЕМ ПУСТЫЕ КОМНАТЫ
+                cleanup_empty_rooms(room_name)
+
+        # Удаляем из подключенных пользователей только если это текущее соединение
+        if user_id in connected_users and connected_users[user_id] == request.sid:
+            connected_users.pop(user_id, None)
+
+        # Обновляем статус
         if user_was_in_any_room:
             current_user.online = False
             db.session.commit()
             print(f"User {current_user.username} disconnected and removed from rooms")
-
-            # оповестить всех о новом списке комнат.
             broadcast_room_list()
 
-    @socketio.on('join_room')  # join_chat
+    @socketio.on('create_room')
+    def handle_create_room(data):
+        """Обработчик создания новой комнаты"""
+        if not current_user.is_authenticated:
+            emit('room_created', {'success': False, 'message': 'Не авторизован'})
+            return
+
+        room_name = data.get('room_name', '').strip()
+
+        if not room_name:
+            emit('room_created', {'success': False, 'message': 'Введите название комнаты'})
+            return
+
+        if len(room_name) > 20:
+            emit('room_created', {'success': False, 'message': 'Название слишком длинное (макс. 20 символов)'})
+            return
+
+        if len(room_name) < 2:
+            emit('room_created', {'success': False, 'message': 'Название слишком короткое (мин. 2 символа)'})
+            return
+
+        try:
+            # Проверяем, нет ли уже такой комнаты
+            existing_room = Room.query.filter_by(name=room_name).first()
+            if existing_room:
+                emit('room_created', {'success': False, 'message': 'Комната с таким названием уже существует'})
+                return
+
+            # Создаем новую комнату
+            new_room = Room(
+                name=room_name,
+                created_by=current_user.id
+            )
+            db.session.add(new_room)
+            db.session.commit()
+
+            # автоматически присоединяем создателя к новой комнате
+            join_room(room_name)
+            if room_name not in active_users:
+                active_users[room_name] = {}
+            active_users[room_name][current_user.id] = current_user.username
+
+            # ОТПРАВЛЯЕМ ОБНОВЛЕННЫЙ СПИСОК КОМНАТ ВСЕМ КЛИЕНТАМ
+            broadcast_room_list()
+
+            # ОТПРАВЛЯЕМ СОЗДАТЕЛЮ ОТВЕТ С ФЛАГОМ ДЛЯ АВТОПЕРЕХОДА
+            emit('room_created', {
+                'success': True,
+                'room_name': room_name,
+                'message': f'Комната "{room_name}" создана!',
+                'auto_join': True  # Флаг для автоматического перехода
+            }, )
+
+            # ОТПРАВЛЯЕМ ОСТАЛЬНЫМ КЛИЕНТАМ ОБЫЧНОЕ УВЕДОМЛЕНИЕ
+            emit('room_created', {
+                'success': True,
+                'room_name': room_name,
+                'message': f'Комната "{room_name}" создана!',
+                'auto_join': False  # Без автоперехода
+            }, broadcast=True, include_self=False)
+
+            print(f"Создана новая комната: {room_name} c пользователем {current_user.username}")
+
+        except Exception as e:
+            print(f"Ошибка при создании комнаты: {e}")
+            emit('room_created', {'success': False, 'message': 'Ошибка при создании комнаты'})
+            db.session.rollback()
+
+    @socketio.on('join_room')
     def handle_join_room(data):
         """Позволяет пользователю войти в указанную комнату, выйдя из предыдущей."""
+
         if not current_user.is_authenticated:
             return
 
-        new_room = data.get('room')
-        if not new_room:
+        new_room_name = data.get('room')
+        if not new_room_name:
             return
 
-        # Запоминаем комнату, из которой выходим (если она была)
-        old_room = None
-        for room_name, users in list(active_users.items()):
-            if current_user.id in users:
-                if room_name != new_room:
-                    old_room = room_name  # Запоминаем старую комнату
-                    break  # Пользователь может быть только в одной комнате
+        # Находим или создаем комнату в базе данных
+        room = Room.query.filter_by(name=new_room_name).first()
+        if not room:
+            room = Room(name=new_room_name, created_by=current_user.id)
+            db.session.add(room)
+            db.session.commit()
+            print(f"Создана новая комната: {new_room_name}")
 
-        # Выходим из предыдущих комнат
-        for room_name, users in list(active_users.items()):
-            if current_user.id in users:
-                if room_name != new_room:
-                    leave_room(room_name)
-                    del active_users[room_name][current_user.id]
-                    emit('user_left', {
-                        'user_id': current_user.id,
-                        'username': current_user.username,
-                        'room': room_name,
-                    }, room=room_name)
+        # Если комната не существует в active_users, создаем ее
+        if new_room_name not in active_users:
+            active_users[new_room_name] = {}
 
-                    # Очищаем пустые комнаты
-                    if not active_users[room_name] and room_name != DEFAULT_ROOM:
-                        del active_users[room_name]
+        # Выходим из предыдущих комнат (кроме DM комнат и комнаты по умолчанию)
+        for room_name, users in list(active_users.items()):
+            if not room_name.startswith('dm_') and current_user.id in users and room_name != new_room_name:
+                leave_room(room_name)
+                del active_users[room_name][current_user.id]
+
+                emit('user_left', {
+                    'user_id': current_user.id,
+                    'username': current_user.username,
+                    'room': room_name,
+                }, room=room_name)
+
+                # Отправляем обновленный список пользователей
+                emit('current_users', {
+                    'users': dict(active_users[room_name]),
+                    'room': room_name
+                }, room=room_name)
+
+                # ПРОВЕРЯЕМ И УДАЛЯЕМ ПУСТЫЕ КОМНАТЫ
+                cleanup_empty_rooms(room_name)
 
         # Присоединяемся к новой комнате
-        join_room(new_room)
-        active_users.setdefault(new_room, {})[current_user.id] = current_user.username
-        current_user.online = True  # Обновляем статус пользователя
+        join_room(new_room_name)
+        active_users[new_room_name][current_user.id] = current_user.username
+        current_user.online = True
         current_user.ping()
         db.session.commit()
 
-        # Логирование для отладки
-        print(f"User {current_user.username} joined room {new_room}")
-        print(f"Current room users: {active_users[new_room]}")
+        print(f"User {current_user.username} joined room {new_room_name}")
+        print(f"Current room users: {active_users[new_room_name]}")
 
-        # Отправляем новому пользователю список участников НОВОЙ комнаты (включая себя)
+        # Отправляем новому пользователю список участников комнаты
         emit('current_users', {
-            'users': dict(active_users[new_room]),  # Преобразуем в обычный dict
-            'room': new_room
-        }, broadcast=False, to=request.sid)  # Используем request.sid вместо current_user.id
+            'users': dict(active_users[new_room_name]),
+            'room': new_room_name,
+        }, to=request.sid)
 
         # Оповещаем других о новом участнике
         emit('user_joined', {
             'user_id': current_user.id,
             'username': current_user.username,
-            'room': new_room
-        }, room=new_room, include_self=False)
+            'room': new_room_name
+        }, room=new_room_name, include_self=False)
 
-        # Рассылаем всем клиентам новый список комнат
+        # Отправляем обновленный список пользователей всем в комнате
+        emit('current_users', {
+            'users': dict(active_users[new_room_name]),
+            'room': new_room_name
+        }, room=new_room_name)
+
         broadcast_room_list()
 
-    @socketio.on('send_message')
-    def handle_message(data):
+    @socketio.on('get_current_users')
+    def handle_get_current_users(data):
+        """Запрос списка пользователей в текущей комнате"""
         if not current_user.is_authenticated:
             return
 
-        room = data.get('room')
-        message_text = data['message']
+        room_name = data.get('room', DEFAULT_ROOM)
 
-        if not room:
+        if room_name in active_users:
+            emit('current_users', {
+                'users': dict(active_users[room_name]),
+                'room': room_name
+            }, to=request.sid)
+
+    @socketio.on('send_message')
+    def handle_send_message(data):
+        """Обработчик отправки сообщения в комнату"""
+        if not current_user.is_authenticated:
             return
 
-        message = Message(
-            content=message_text,
-            sender_id=current_user.id,
-            recipient_id=None,  # Общий чат (если личные сообщения, то указываем recipient_id)
-            room=room  # Сохраняем название комнаты в базе
-        )
-        db.session.add(message)
-        db.session.commit()
-        emit('new_message', message.to_dict(), room=room)
+        room_name = data.get('room')
+        message_content = data.get('message', '').strip()
 
-        # запрос списка доступных комнат
-        @socketio.on('get_rooms')
-        def handle_get_rooms():
-            """Отправляет клиенту список всех комнат."""
-            # Можно расширить, чтобы отдавать и предопределённые комнаты из config
-            room_list = get_rooms_list()
-            emit('room_list', {'rooms': room_list})
+        if not room_name or not message_content:
+            return
+
+        # Сохраняем сообщение в базу данных
+        try:
+            # Находим или создаем комнату
+            room = Room.query.filter_by(name=room_name).first()
+            if not room:
+                room = Room(name=room_name, created_by=current_user.id)
+                db.session.add(room)
+                db.session.commit()
+
+            # Создаем сообщение для комнаты
+            new_message = Message(
+                content=message_content,
+                sender_id=current_user.id,
+                room_id=room.id,  # Используем room_id вместо room
+                is_dm=False  # Указываем, что это не личное сообщение
+            )
+
+            db.session.add(new_message)
+            db.session.commit()
+
+            # Отправляем сообщение всем в комнате, КРОМЕ отправителя
+            emit('new_message', {
+                'sender_id': current_user.id,
+                'sender_username': current_user.username,
+                'content': new_message.content,
+                'room': room_name,
+                'room_id': room.id,
+                'timestamp': new_message.timestamp.isoformat(),
+                'created_at': new_message.timestamp.isoformat(),
+                'is_dm': False,
+            }, room=room_name, include_self=False)  # ИСКЛЮЧАЕМ отправителя
+
+            print(f"Сообщение от {current_user.username} в комнате {room}: {message_content}")
+
+        except Exception as e:
+            print(f"Ошибка при сохранении сообщения: {e}")
+            import traceback
+            traceback.print_exc()
+            db.session.rollback()
+
+    @socketio.on('start_dm')
+    def handle_start_dm(data):
+        """Обработчик начала личной переписки - загружает историю сообщений"""
+        if not current_user.is_authenticated:
+            return
+
+        recipient_id = data.get('recipient_id')
+
+        if not recipient_id:
+            return
+
+        try:
+            # Находим получателя
+            recipient = User.query.get(recipient_id)
+            if not recipient:
+                print(f"Получатель с ID {recipient_id} не найден")
+                return
+
+            # Загружаем историю переписки между текущим пользователем и получателем
+            messages = Message.query.filter(
+                ((Message.sender_id == current_user.id) & (Message.recipient_id == recipient_id)) |
+                ((Message.sender_id == recipient_id) & (Message.recipient_id == current_user.id))
+            ).filter_by(is_dm=True).order_by(Message.timestamp.asc()).all()
+
+            # Преобразуем сообщения в словари
+            messages_data = []
+            for message in messages:
+                messages_data.append({
+                    'sender_id': message.sender_id,
+                    'sender_username': message.sender.username if message.sender else 'Unknown',
+                    'recipient_id': message.recipient_id,
+                    'content': message.content,
+                    'timestamp': message.timestamp.isoformat(),
+                    'is_dm': True
+                })
+
+            # Отправляем историю переписки клиенту
+            emit('dm_history', {
+                'recipient_id': recipient_id,
+                'recipient_name': recipient.username,
+                'messages': messages_data
+            })
+
+            print(f"Загружена история ЛС между {current_user.username} и {recipient.username}")
+
+        except Exception as e:
+            print(f"Ошибка при загрузке истории ЛС: {e}")
+
+    @socketio.on('send_dm')
+    def handle_send_dm(data):
+        """Обработчик отправки личного сообщения"""
+        if not current_user.is_authenticated:
+            return
+
+        recipient_id = data.get('recipient_id')
+        message_content = data.get('message', '').strip()
+
+        if not recipient_id or not message_content:
+            return
+
+        try:
+            # Сохраняем сообщение в базу данных
+            new_message = Message(
+                content=message_content,
+                sender_id=current_user.id,
+                recipient_id=recipient_id,
+                is_dm=True
+            )
+
+            db.session.add(new_message)
+            db.session.commit()
+
+            # Формируем данные сообщения
+            message_data = {
+                'sender_id': current_user.id,
+                'sender_username': current_user.username,
+                'recipient_id': recipient_id,
+                'content': new_message.content,
+                'timestamp': new_message.timestamp.isoformat(),
+                'is_dm': True
+            }
+
+            # Отправляем сообщение получателю
+            recipient_sid = connected_users.get(int(recipient_id))
+            if recipient_sid:
+                emit('new_dm', message_data, room=recipient_sid)
+
+                # ОБНОВЛЯЕМ СПИСОК ДИАЛОГОВ ПОЛУЧАТЕЛЯ
+                emit('dm_conversations', {
+                    'conversations': get_dm_conversations(int(recipient_id))
+                }, room=recipient_sid)
+
+            # ТАКЖЕ ОБНОВЛЯЕМ СПИСОК ДИАЛОГОВ ОТПРАВИТЕЛЯ
+            emit('dm_conversations', {
+                'conversations': get_dm_conversations(current_user.id)
+            })
+
+            print(f"ЛС от {current_user.username} к {recipient_id}: {message_content}")
+
+        except Exception as e:
+            print(f"Ошибка при отправке ЛС: {e}")
+            db.session.rollback()
+
+    @socketio.on('get_dm_conversations')
+    def handle_get_dm_conversations():
+        """Обработчик запроса списка диалогов"""
+        if not current_user.is_authenticated:
+            return
+
+        try:
+            conversations = get_dm_conversations(current_user.id)
+            emit('dm_conversations', {
+                'conversations': conversations
+            })
+
+            print(f"Отправлены диалоги для пользователя {current_user.username}")
+
+        except Exception as e:
+            print(f"Ошибка при получении диалогов: {e}")
+
+    @socketio.on('mark_messages_as_read')
+    def handle_mark_messages_as_read(data):
+        """Помечает сообщения как прочитанные"""
+        if not current_user.is_authenticated:
+            return
+
+        sender_id = data.get('sender_id')
+
+        try:
+            # Помечаем все непрочитанные сообщения от этого пользователя как прочитанные
+            unread_messages = Message.query.filter(
+                (Message.sender_id == sender_id) &
+                (Message.recipient_id == current_user.id) &
+                (Message.is_read == False)
+            ).all()
+
+            for message in unread_messages:
+                message.is_read = True
+
+            db.session.commit()
+            print(f"Сообщения от {sender_id} помечены как прочитанные для {current_user.username}")
+
+            # Обновляем список диалогов
+            emit('dm_conversations', {
+                'conversations': get_dm_conversations(current_user.id)
+            })
+
+        except Exception as e:
+            print(f"Ошибка при пометке сообщений как прочитанных: {e}")
+            db.session.rollback()
 
 
 def broadcast_room_list():
     """Рассылает актуальный список комнат всем клиентам."""
-    room_list = get_rooms_list()  # Используем новую функцию
-    emit('room_list', {'rooms': room_list}, broadcast=True, namespace='/')
+    room_list = get_rooms_list()
+    emit('room_list', {'rooms': room_list}, broadcast=True)
 
 
 def get_rooms_list():
     """Возвращает список всех комнат: постоянные + активные с пользователями."""
     # Всегда включаем комнату по умолчанию
     all_rooms = {DEFAULT_ROOM}
-    # Добавляем все комнаты, где есть пользователи
-    all_rooms.update(active_users.keys())
-    return list(all_rooms)
+
+    # Добавляем все комнаты из базы данных
+    rooms_from_db = Room.query.all()
+    for room in rooms_from_db:
+        all_rooms.add(room.name)
+
+    # Добавляем все комнаты, где есть пользователи (исключаем DM комнаты)
+    for room_name in active_users.keys():
+        if not room_name.startswith('dm_'):
+            all_rooms.add(room_name)
+    return sorted(list(all_rooms))  # Просто список названий комнат
+
+
+def cleanup_empty_rooms(room_name):
+    """Удаляет комнату из базы, если в ней нет пользователей и это не комната по умолчанию"""
+    if room_name == DEFAULT_ROOM:
+        return  # Не удаляем комнату по умолчанию
+
+    if room_name in active_users and not active_users[room_name]:
+        # Комната пустая - удаляем из active_users
+        del active_users[room_name]
+
+        # Удаляем из базы данных
+        room = Room.query.filter_by(name=room_name).first()
+        if room:
+            # Сначала удаляем все сообщения этой комнаты
+            Message.query.filter_by(room_id=room.id).delete()
+            # Затем удаляем саму комнату
+            db.session.delete(room)
+            db.session.commit()
+            print(f"Комната {room_name} удалена (пустая)")
+
+            # Рассылаем обновленный список комнат
+            broadcast_room_list()
+
+
+def get_dm_conversations(user_id):
+    """Возвращает список диалогов для пользователя"""
+    conversations = []
+
+    # Находим всех пользователей, с которыми есть переписка
+    sent_messages = Message.query.filter_by(sender_id=user_id, is_dm=True).all()
+    received_messages = Message.query.filter_by(recipient_id=user_id, is_dm=True).all()
+
+    # Собираем уникальных собеседников
+    interlocutors = set()
+    for msg in sent_messages:
+        interlocutors.add(msg.recipient_id)
+    for msg in received_messages:
+        interlocutors.add(msg.sender_id)
+
+    # Для каждого собеседника получаем информацию
+    for interlocutor_id in interlocutors:
+        interlocutor = User.query.get(interlocutor_id)
+        if interlocutor:
+            # Находим последнее сообщение в диалоге
+            last_message = Message.query.filter(
+                ((Message.sender_id == user_id) & (Message.recipient_id == interlocutor_id)) |
+                ((Message.sender_id == interlocutor_id) & (Message.recipient_id == user_id))
+            ).filter_by(is_dm=True).order_by(Message.timestamp.desc()).first()
+
+            # Считаем непрочитанные сообщения
+            unread_count = Message.query.filter(
+                (Message.sender_id == interlocutor_id) &
+                (Message.recipient_id == user_id) &
+                (Message.is_read == False)
+            ).count()
+
+            # Считаем непрочитанные сообщения (ВАЖНО: только входящие сообщения)
+            unread_count = Message.query.filter(
+                (Message.sender_id == interlocutor_id) &
+                (Message.recipient_id == user_id) &
+                (Message.is_read == False)  # Сообщения не прочитаны
+            ).count()
+
+            # Преобразуем datetime в строку
+            last_message_time = last_message.timestamp.isoformat() if last_message else None
+
+            conversations.append({
+                'user_id': interlocutor_id,
+                'username': interlocutor.username,
+                'last_message_time': last_message_time,
+                'unread_count': unread_count,  # Добавляем счетчик непрочитанных
+            })
+
+    return conversations
+
+
 
