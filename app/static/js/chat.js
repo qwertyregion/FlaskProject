@@ -8,6 +8,12 @@ let isInDMMode = false; // Флаг для отслеживания режима
 let isPageUnloading = false;
 let reconnectTimer = null;
 let messageHistoryLoaded = false;  // Добавим в начало файла переменную для отслеживания истории
+let virtualizedChat = null;
+let currentMessages = []; // Хранилище всех загруженных сообщений
+let currentOffset = 0;
+let hasMoreMessages = true;
+let unreadMessagesCount = 0;
+let newMessagesIndicator = null;
 
 // Обработчик перед закрытием страницы
 window.addEventListener('beforeunload', () => {
@@ -16,6 +22,247 @@ window.addEventListener('beforeunload', () => {
         socket.disconnect();
     }
 });
+
+// --------------------------ВИРТУАЛИЗАЦИЯ СООБЩЕНИЙ -------------------------------
+
+class VirtualizedChat {
+    constructor(container) {
+        this.container = container;
+        this.messages = [];
+        this.offset = 0;
+        this.hasMore = true;
+        this.isLoading = false;
+        this.currentRoom = currentRoom;
+
+        this.setupScrollHandler();
+        this.setupLoadMoreButton();
+    }
+
+    setupScrollHandler() {
+        this.container.addEventListener('scroll', () => {
+            if (this.isNearTop(this.container) && this.hasMore && !this.isLoading) {
+                this.loadMoreMessages();
+            }
+        });
+    }
+
+    setupLoadMoreButton() {
+        this.loadMoreBtn = document.createElement('button');
+        this.loadMoreBtn.textContent = 'Загрузить предыдущие сообщения';
+        this.loadMoreBtn.className = 'load-more-btn';
+        this.loadMoreBtn.style.display = 'none';
+        this.loadMoreBtn.onclick = () => this.loadMoreMessages();
+
+        this.container.parentNode.insertBefore(this.loadMoreBtn, this.container);
+    }
+
+    isNearTop() {
+        return this.container.scrollTop < 100;
+    }
+
+    loadMoreMessages() {
+        if (this.isLoading || !this.hasMore || this.currentRoom !== currentRoom) return;
+
+        this.isLoading = true;
+        this.loadMoreBtn.textContent = 'Загрузка...';
+        this.loadMoreBtn.disabled = true;
+
+        socket.emit('load_more_messages', {
+            room: currentRoom,
+            offset: this.offset,
+            limit: 20  // Уменьшим лимит для лучшей производительности
+        });
+    }
+
+    handleNewMessages(data) {
+        // Проверяем, что данные для текущей комнаты
+        if (data.room !== currentRoom) return;
+
+        this.isLoading = false;
+        this.loadMoreBtn.disabled = false;
+        this.loadMoreBtn.textContent = 'Загрузить предыдущие сообщения';
+
+        if (data.messages && data.messages.length > 0) {
+            const oldScrollHeight = this.container.scrollHeight;
+            const oldScrollTop = this.container.scrollTop;
+
+            // Добавляем сообщения в начало
+            this.messages = [...data.messages, ...this.messages];
+            this.offset = data.offset;
+            this.hasMore = data.has_more;
+
+            this.renderVisibleMessages();
+
+            // Восстанавливаем позицию скролла
+            const newScrollHeight = this.container.scrollHeight;
+            this.container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+        }
+
+        this.loadMoreBtn.style.display = this.hasMore ? 'block' : 'none';
+    }
+
+    renderVisibleMessages() {
+        const chatBox = document.getElementById('chat-box');
+        if (!chatBox) return;
+
+        const oldScrollHeight = chatBox.scrollHeight;
+        const oldScrollTop = chatBox.scrollTop;
+
+        // Очищаем и перерисовываем
+        chatBox.innerHTML = '';
+        this.messages.forEach(message => {
+            this.addMessageToDOM(message);
+        });
+
+        const newScrollHeight = chatBox.scrollHeight;
+        chatBox.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+    }
+
+    addMessageToDOM(message) {
+        const chatBox = document.getElementById('chat-box');
+        if (!chatBox) return;
+
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message');
+        messageElement.setAttribute('data-message-id', message.id);
+
+        const timestamp = message.timestamp ? new Date(message.timestamp).toLocaleTimeString() :
+                         new Date().toLocaleTimeString();
+
+        // Определяем, свое ли это сообщение
+        const isMyMessage = window.currentUser && message.sender_id == window.currentUser.id;
+
+        if (isMyMessage) {
+            messageElement.classList.add('my-message');
+            messageElement.innerHTML = `
+                <strong>Вы</strong>
+                <small>[${timestamp}]</small>:
+                <div class="message-content">${message.content}</div>
+            `;
+        } else {
+            messageElement.innerHTML = `
+                <strong>${message.sender_username}</strong>
+                <small>[${timestamp}]</small>:
+                <div class="message-content">${message.content}</div>
+            `;
+        }
+
+        chatBox.appendChild(messageElement);
+    }
+
+    addNewMessage(message) {
+        // Добавляем новое сообщение в конец
+        this.messages.push(message);
+        this.addMessageToDOM(message);
+
+        // Автоматически скроллим к новому сообщению, если пользователь near the bottom
+        const chatBox = document.getElementById('chat-box');
+        const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 150;
+
+        if (isNearBottom) {
+            setTimeout(() => {
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }, 50);
+        }
+    }
+
+    resetForNewRoom(roomName) {
+        this.messages = [];
+        this.offset = 0;
+        this.hasMore = true;
+        this.isLoading = false;
+        this.currentRoom = roomName;
+        this.loadMoreBtn.style.display = 'none';
+    }
+}
+
+// Обновим обработчик скролла для скрытия индикатора
+function setupChatScrollHandler() {
+    const chatBox = document.getElementById('chat-box');
+    if (chatBox) {
+        chatBox.addEventListener('scroll', () => {
+            const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 50;
+
+            if (isNearBottom && unreadMessagesCount > 0) {
+                hideNewMessagesIndicator();
+            }
+        });
+    }
+}
+
+// Обновим autoScrollToNewMessage
+function autoScrollToNewMessage() {
+    const chatBox = document.getElementById('chat-box');
+    if (!chatBox) return;
+
+    const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 150;
+
+    if (isNearBottom) {
+        setTimeout(() => {
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }, 50);
+        hideNewMessagesIndicator();
+    } else {
+        // Показываем индикатор новых сообщений
+        unreadMessagesCount++;
+        showNewMessagesIndicator(unreadMessagesCount);
+    }
+}
+
+// Функция для создания индикатора новых сообщений
+function createNewMessagesIndicator() {
+    if (!newMessagesIndicator) {
+        newMessagesIndicator = document.createElement('div');
+        newMessagesIndicator.id = 'new-messages-indicator';
+        newMessagesIndicator.innerHTML = 'Новые сообщения ↓';
+        newMessagesIndicator.style.cssText = `
+            position: fixed;
+            bottom: 70px;
+            right: 20px;
+            background: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        `;
+
+        newMessagesIndicator.addEventListener('click', () => {
+            const chatBox = document.getElementById('chat-box');
+            if (chatBox) {
+                chatBox.scrollTop = chatBox.scrollHeight;
+                hideNewMessagesIndicator();
+            }
+        });
+
+        document.body.appendChild(newMessagesIndicator);
+    }
+    return newMessagesIndicator;
+}
+
+function showNewMessagesIndicator(count) {
+    const indicator = createNewMessagesIndicator();
+    indicator.innerHTML = `${count} новых сообщения ↓`;
+    indicator.style.display = 'block';
+    unreadMessagesCount = count;
+}
+
+function hideNewMessagesIndicator() {
+    if (newMessagesIndicator) {
+        newMessagesIndicator.style.display = 'none';
+        unreadMessagesCount = 0;
+    }
+}
+
+function isNearTop(element, threshold = 100) {
+    return element.scrollTop < threshold;
+}
+
+function isNearBottom(element, threshold = 100) {
+    return element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
+}
 
 // -------------------------- ОБРАБОТЧИКИ СОБЫТИЙ SOCKET.IO -----------------------------------
 
@@ -114,23 +361,6 @@ socket.on('current_users', (data) => {
     }
 });
 
-// Получение сообщений
-socket.on('new_message', (data) => {
-    // Проверяем, что сообщение из текущей комнаты и не ЛС
-    if (data.room === currentRoom && !data.is_dm && !isInDMMode) {
-        // Пропускаем свои собственные сообщения (они уже отображены локально)
-        if (window.currentUser && data.sender_id === window.currentUser.id) {
-            console.log('Это наше сообщение, проверяем на дубликат');
-        }
-        // Добавляем флаг, что это не из истории
-        data.is_history = false;
-        addMessageToChat(data);
-    } else {
-        console.log('Сообщение пропущено:', 'текущая комната:', currentRoom,
-                    'комната сообщения:', data.room, 'режим ЛС:', isInDMMode);
-    }
-});
-
 // Когда новый пользователь присоединился
 socket.on('user_joined', (data) => {
     if (data.room === currentRoom && !isInDMMode) {
@@ -188,20 +418,34 @@ socket.on('room_created', (data) => {
     }
 });
 
+// ------------------------ОБРАБОТЧИКИ СООБЩЕНИЙ -------------------------
+
+// Получение сообщений
+socket.on('new_message', (data) => {
+    // Проверяем, что сообщение из текущей комнаты и не ЛС
+    if (data.room === currentRoom && !data.is_dm && !isInDMMode) {
+        if (virtualizedChat) {
+            virtualizedChat.addNewMessage(data);
+        } else {
+            addMessageToChat(data);
+        }
+
+        // Автоскролл или показ индикатора
+        autoScrollToNewMessage();
+    }
+});
+
 // Обработчик получения истории сообщений
 socket.on('message_history', (data) => {
     // Проверяем, что история для текущей комнаты
     if (data.room === currentRoom && !isInDMMode) {
         const chatBox = document.getElementById('chat-box');
-        if (!chatBox) return;
-
-        // Очищаем чат перед добавлением истории
-        chatBox.innerHTML = '';
-
-        // Добавляем все сообщения из истории
-        data.messages.forEach(message => {
-            addMessageToChat(message);
-        });
+        if (virtualizedChat) {
+            virtualizedChat.messages = data.messages;
+            virtualizedChat.offset = data.messages.length;
+            virtualizedChat.hasMore = data.has_more;
+            virtualizedChat.renderVisibleMessages();
+        }
 
         messageHistoryLoaded = true;
 
@@ -214,6 +458,42 @@ socket.on('message_history_error', (data) => {
     console.error('Ошибка загрузки истории:', data.error);
     addNotification('Не удалось загрузить историю сообщений');
 });
+
+// Обновляем обработчик события
+socket.on('more_messages_loaded', (data) => {
+    console.log('Получены дополнительные сообщения:', data.messages?.length, 'для комнаты:', data.room);
+
+    if (virtualizedChat && data.room === currentRoom && !isInDMMode) {
+        virtualizedChat.handleNewMessages(data);
+    }
+});
+
+// Добавляем обработчик ошибок
+socket.on('load_more_error', (data) => {
+    console.error('Ошибка загрузки сообщений:', data.error);
+    if (virtualizedChat) {
+        virtualizedChat.isLoading = false;
+        virtualizedChat.loadMoreBtn.disabled = false;
+        virtualizedChat.loadMoreBtn.textContent = 'Загрузить предыдущие сообщения';
+    }
+});
+
+// Функция для автоматической прокрутки к новому сообщению
+function autoScrollToNewMessage() {
+    const chatBox = document.getElementById('chat-box');
+    if (!chatBox) return;
+
+    // Проверяем, находится ли пользователь near the bottom
+    const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 150;
+
+    // Если пользователь near the bottom или просматривает самые свежие сообщения, скроллим
+    if (isNearBottom) {
+        // Небольшая задержка для гарантии, что сообщение уже добавлено в DOM
+        setTimeout(() => {
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }, 50);
+    }
+}
 
 // ---------------------------- Обработчики для личных сообщений ----------------------------
 
@@ -340,6 +620,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Инициализация табов после загрузки DOM
     initTabs();
+
+    // Инициализируем обработчик скролла чата
+    setupChatScrollHandler();
+
+    // Создаем индикатор новых сообщений
+    createNewMessagesIndicator();
 });
 
 // Декоратор для добавления обработки Enter к любому полю ввода
@@ -381,34 +667,33 @@ function initScrollHandler() {
 
 // Функция инициализации, вызывается при загрузке или смене комнаты
 function initChat() {
-    clearChatUI();  // Очищаем интерфейс текущей комнаты
+    clearChatUI();
 
     if (!isInDMMode) {
-        socket.emit('join_room', { room: currentRoom });  // Присоединяемся к серверной комнате
+        const chatBox = document.getElementById('chat-box');
 
-        // Запрашиваем список пользователей в комнате
+        // Инициализируем или обновляем виртуализатор
+        if (!virtualizedChat) {
+            virtualizedChat = new VirtualizedChat(chatBox);
+        } else {
+            virtualizedChat.resetForNewRoom(currentRoom);
+        }
+
+        socket.emit('join_room', { room: currentRoom });
         socket.emit('get_current_users', { room: currentRoom });
-
-        // Запрашиваем список комнат
         socket.emit('get_rooms');
 
-        // Загружаем историю сообщений только если еще не загружали
-        if (!messageHistoryLoaded) {
-            loadMessageHistory(currentRoom);
-        }
+        // Загружаем историю сообщений
+        loadMessageHistory(currentRoom);
     }
 }
 
 function switchToRoom(roomName) {
     isInDMMode = false;
     currentDMRecipient = null;
-    messageHistoryLoaded = false; // Сбрасываем флаг при смене комнаты
+    messageHistoryLoaded = false;
 
-    // Очищаем только чат, сохраняя списки
-    const chatBox = document.getElementById('chat-box');
-    if (chatBox) chatBox.innerHTML = '';
-
-    currentRoom = roomName;  // Меняем комнату
+    currentRoom = roomName;
     document.getElementById('current-room').textContent = currentRoom;
 
     // Обновляем выделение активной комнаты
@@ -420,17 +705,15 @@ function switchToRoom(roomName) {
         if (item.textContent.includes(roomName)) {
             item.classList.add('active');
             item.classList.add('new-room');
-            // Убираем подсветку через 2 секунды
             setTimeout(() => {
                 item.classList.remove('new-room');
             }, 2000);
         }
     });
 
-    switchToRoomsTab();  // Переключаемся на вкладку комнат
-    initChat();  // Инициализируем чат с явным запросом всех данных
+    switchToRoomsTab();
+    initChat();
 
-    // Дополнительно запрашиваем данные после смены комнаты
     setTimeout(() => {
         socket.emit('get_rooms');
         socket.emit('get_current_users', { room: currentRoom });
@@ -510,48 +793,40 @@ function addMessageToChat(data) {
     const chatBox = document.getElementById('chat-box');
     if (!chatBox) return;
 
-    // Проверяем, нет ли уже такого сообщения (по ID или содержанию + времени)
-    const existingMessage = Array.from(chatBox.children).find(msg => {
-        const messageId = msg.getAttribute('data-message-id');
-        return messageId === String(data.id);
-    });
-
-    if (existingMessage && !data.is_local) {
-        console.log('Сообщение уже отображено, пропускаем:', data.id);
-        return;
-    }
+    // Проверяем дубликаты
+    const existingMessage = chatBox.querySelector(`[data-message-id="${data.id}"]`);
+    if (existingMessage && !data.is_local) return;
 
     const messageElement = document.createElement('div');
     messageElement.classList.add('message');
+    messageElement.setAttribute('data-message-id', data.id);
 
-    // Добавляем ID сообщения для проверки дубликатов
-    if (data.id) {
-        messageElement.setAttribute('data-message-id', data.id);
-    }
-
-    // timestamp, если он есть в data
     const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() :
-                     data.created_at ? new Date(data.created_at).toLocaleTimeString() : '';
+                     new Date().toLocaleTimeString();
 
-    // Добавляем класс для своих сообщений
-    if (data.is_local || (window.currentUser && data.sender_username === window.currentUser.username)) {
+    // Определяем, свое ли это сообщение
+    const isMyMessage = data.is_local || (window.currentUser && data.sender_id === window.currentUser.id);
+
+    if (isMyMessage) {
         messageElement.classList.add('my-message');
         messageElement.innerHTML = `
             <strong>Вы</strong>
-            <small>[${new Date().toLocaleTimeString()}]</small>:
-            ${data.content}
+            <small>[${timestamp}]</small>:
+            <div class="message-content">${data.content}</div>
         `;
     } else {
         messageElement.innerHTML = `
             <strong>${data.sender_username}</strong>
-            <small>[${new Date(data.timestamp).toLocaleTimeString()}]</small>:
-            ${data.content}
+            <small>[${timestamp}]</small>:
+            <div class="message-content">${data.content}</div>
         `;
     }
+
     chatBox.appendChild(messageElement);
 
-    // Прокручиваем вниз только если это новое сообщение, а не загруженное из истории
-    if (!data.is_history) {
+    // Автоскролл ТОЛЬКО если пользователь near the bottom
+    const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 150;
+    if (isNearBottom) {
         chatBox.scrollTop = chatBox.scrollHeight;
     }
 }
@@ -1192,13 +1467,6 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-//// Добавим периодическое обновление списков (каждые 30 секунд)
-//setInterval(() => {
-//    if (socket.connected && !isInDMMode) {
-//        socket.emit('get_rooms');
-//        socket.emit('get_current_users', { room: currentRoom });
-//    }
-//}, 30000);
 
 
 

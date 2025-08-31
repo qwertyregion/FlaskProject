@@ -301,6 +301,57 @@ def register_socketio_handlers(socketio):
             traceback.print_exc()
             db.session.rollback()
 
+    # пагинация обработчика истории сообщений
+    @socketio.on('load_more_messages')
+    def handle_load_more_messages(data):
+        """Загрузка дополнительных сообщений с пагинацией"""
+        if not current_user.is_authenticated:
+            return
+
+        room_name = data.get('room')
+        offset = data.get('offset', 0)
+        limit = data.get('limit', 10)
+
+        try:
+            # Проверяем, что комната существует
+            room = Room.query.filter_by(name=room_name).first()
+            if not room:
+                emit('load_more_error', {'error': 'Комната не найдена'})
+                return
+
+            # Загружаем сообщения
+            messages = Message.query.filter_by(
+                room_id=room.id,
+                is_dm=False
+            ).order_by(
+                Message.timestamp.desc()
+            ).offset(offset).limit(limit).all()
+
+            messages.reverse()  # Меняем порядок на старые → новые
+
+            messages_data = []
+            for message in messages:
+                messages_data.append({
+                    'id': message.id,
+                    'sender_id': message.sender_id,
+                    'sender_username': message.sender.username,
+                    'content': message.content,
+                    'timestamp': message.timestamp.isoformat(),
+                    'is_dm': False,
+                    'room': room_name  # Добавляем информацию о комнате
+                })
+
+            emit('more_messages_loaded', {
+                'messages': messages_data,
+                'has_more': len(messages) == limit,
+                'offset': offset + len(messages),
+                'room': room_name  # Добавляем информацию о комнате
+            })
+
+        except Exception as e:
+            print(f"Ошибка при загрузке сообщений: {e}")
+            emit('load_more_error', {'error': 'Ошибка загрузки сообщений'})
+
     @socketio.on('get_message_history')
     def handle_get_message_history(data):
         """Обработчик загрузки истории сообщений комнаты"""
