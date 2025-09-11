@@ -1,12 +1,12 @@
 from datetime import datetime
-from flask import Blueprint, render_template, flash, redirect, url_for, abort
+from flask import Blueprint, render_template, flash, redirect, url_for, abort, current_app
 from flask_login import login_required, current_user
 from app.external_api import get_location_data, get_weather_data
 from app.main.forms import ProfileUserForm
 from app.models import User, Message
 from app.schemas import GeoWeatherResponse
 from app.extensions import db, socketio
-from config import apikey
+from config import WEATHER_API_KEY
 
 main_bp = Blueprint('main', __name__)
 
@@ -20,9 +20,7 @@ def index():
     """
     try:
         location_data = get_location_data()
-        print(location_data)
-        weather_data = get_weather_data(lat=location_data.latitude, lon=location_data.longitude, key=apikey, )
-        print(weather_data)
+        weather_data = get_weather_data(lat=location_data.latitude, lon=location_data.longitude, key=WEATHER_API_KEY)
         response = GeoWeatherResponse(
             location=location_data,
             weather=weather_data,
@@ -33,7 +31,11 @@ def index():
                                weather=response.weather,
                                timestamp=response.timestamp)
     except Exception as e:
-        return render_template('error.html', error=str(e))
+        current_app.logger.error(f"Error in index route: {str(e)}")
+        # Безопасная обработка ошибок - не раскрываем внутреннюю информацию
+        return render_template('error.html', 
+                             error="Произошла ошибка при загрузке данных. Попробуйте позже.",
+                             error_code="500")
 
 
 # @app_flask.route('/profile/<username>', methods=['GET', 'POST', ])

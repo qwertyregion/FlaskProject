@@ -52,12 +52,6 @@
 
     <!-- Основное содержимое -->
     <main class="container">
-        <!-- Секция героя (по желанию) -->
-        <section class="hero-section text-center rounded">
-            <h1>Добро пожаловать на наш сайт</h1>
-            <p class="lead">Используйте навигацию выше для перехода по разделам</p>
-        </section>
-
         <!-- Блок для вывода flash-сообщений -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}

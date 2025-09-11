@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Dict, Optional
 from app.extensions import db, login_manager
 from flask_login import UserMixin, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6,66 +7,75 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(20), nullable=False)
+    username = db.Column(db.String(20), nullable=False, unique=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128))
-    online = db.Column(db.Boolean, default=False)  # Добавляем статус "онлайн"
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)  # Время последней активности
+    password_hash = db.Column(db.String(128), nullable=False)
+    online = db.Column(db.Boolean, default=False, nullable=False)  # Добавляем статус "онлайн"
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)  # Время последней активности
 
-    # Связи
+    # Связи с каскадным удалением
     sent_messages = db.relationship('Message',
                                     foreign_keys='Message.sender_id',
                                     back_populates='sender',
-                                    lazy='dynamic')
+                                    lazy='dynamic',
+                                    cascade='all, delete-orphan')
 
     received_messages = db.relationship('Message',
                                         foreign_keys='Message.recipient_id',
                                         back_populates='recipient',
-                                        lazy='dynamic')
+                                        lazy='dynamic',
+                                        cascade='all, delete-orphan')
 
     created_rooms = db.relationship('Room',
                                     back_populates='creator_obj',
-                                    lazy='dynamic')
+                                    lazy='dynamic',
+                                    cascade='all, delete-orphan')
 
     unread_messages = db.relationship('UnreadMessage',
                                       back_populates='user',
-                                      lazy='dynamic')
+                                      lazy='dynamic',
+                                      cascade='all, delete-orphan')
 
     __table_args__ = (
         db.Index('ix_user_email', 'email', unique=True),
-        db.Index('ix_user_username', 'username', unique=True)
+        db.Index('ix_user_username', 'username', unique=True),
+        db.Index('ix_user_online', 'online'),  # Для быстрого поиска онлайн пользователей
+        db.Index('ix_user_last_seen', 'last_seen'),  # Для сортировки по активности
     )
 
-    def set_password(self, password):
+    def set_password(self, password: str) -> None:
+        """Устанавливает хеш пароля"""
         self.password_hash = generate_password_hash(password)
 
-    def check_password(self, password):
+    def check_password(self, password: str) -> bool:
+        """Проверяет пароль"""
         return check_password_hash(self.password_hash, password)
 
-    def ping(self):
+    def ping(self) -> None:
         """Обновляет время последней активности"""
         self.last_seen = datetime.utcnow()
         db.session.commit()
 
     @classmethod
-    def get_online_users(cls, room=None):
+    def get_online_users(cls, room: Optional[str] = None) -> Dict[int, str]:
         """Возвращает словарь {id: username} активных пользователей"""
-        query = cls.query.filter_by(online=True)
+        # Оптимизированный запрос - выбираем только нужные поля
+        query = cls.query.with_entities(cls.id, cls.username).filter_by(online=True)
         if room:
             # Если нужна фильтрация по комнате (для будущего расширения)
             pass
-        return {user.id: user.username for user in query.all()}
+        return dict(query.all())
 
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    room_id = db.Column(db.Integer, db.ForeignKey('room.id'))  # Ссылка на модель Room
-    is_read = db.Column(db.Boolean, default=False)
-    is_dm = db.Column(db.Boolean, default=False)  # Флаг личного сообщения
+    timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow, nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  # Может быть None для комнатных сообщений
+    room_id = db.Column(db.Integer, db.ForeignKey('room.id'), nullable=True)  # Может быть None для ЛС
+    is_read = db.Column(db.Boolean, default=False, nullable=False)
+    is_dm = db.Column(db.Boolean, default=False, nullable=False)  # Флаг личного сообщения
 
     # Связи
     sender = db.relationship('User',
@@ -83,10 +93,23 @@ class Message(db.Model):
                                     back_populates='message',
                                     lazy='dynamic')
 
-    def __repr__(self):
-        return f'<Message {self.id} by {self.user_id}>'
+    __table_args__ = (
+        # Индексы для часто используемых запросов
+        db.Index('ix_message_sender_id', 'sender_id'),
+        db.Index('ix_message_recipient_id', 'recipient_id'),
+        db.Index('ix_message_room_id', 'room_id'),
+        db.Index('ix_message_is_dm', 'is_dm'),
+        # Составные индексы для часто используемых запросов
+        db.Index('ix_message_room_timestamp', 'room_id', 'timestamp'),
+        db.Index('ix_message_dm_timestamp', 'is_dm', 'timestamp'),
+        db.Index('ix_message_sender_recipient', 'sender_id', 'recipient_id'),
+        db.Index('ix_message_room_dm', 'room_id', 'is_dm'),
+    )
 
-    def to_dict(self):
+    def __repr__(self) -> str:
+        return f'<Message {self.id} by {self.sender_id}>'
+
+    def to_dict(self) -> Dict[str, any]:
         """Преобразует сообщение в словарь для отправки через Socket.IO"""
         return {
             'id': self.id,
@@ -120,9 +143,9 @@ class Room(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(50), unique=True, nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_active = db.Column(db.Boolean, default=True)
-    is_private = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_private = db.Column(db.Boolean, default=False, nullable=False)
 
     # Связи
     creator_obj = db.relationship('User', foreign_keys=[created_by])
@@ -131,10 +154,11 @@ class Room(db.Model):
                                lazy='dynamic',
                                )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'<Room {self.name}>'
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, any]:
+        """Преобразует комнату в словарь"""
         return {
             'id': self.id,
             'name': self.name,
@@ -145,7 +169,7 @@ class Room(db.Model):
 
 
 @login_manager.user_loader
-def load_user(user_id):
+def load_user(user_id: str) -> Optional[User]:
     """Загрузка пользователя для Flask-Login"""
     if not user_id or not user_id.isdigit():
         return None

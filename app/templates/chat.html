@@ -6,13 +6,21 @@
 
 {% block script %}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+    <!-- Модульная версия чата -->
+    <script src="{{ url_for('static', filename='js/modules/socket-handlers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/chat-ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/dm-handler.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/virtualized-chat.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/chat-modular.js') }}"></script>
     <script>
         // Инициализация пользовательских данных
         window.currentUser = {
-            id: "{{ current_user.id }}",
+            id: {{ current_user.id }},
             username: "{{ current_user.username }}"
         };
+        
+        // Добавляем класс для страницы чата
+        document.body.classList.add('chat-page');
     </script>
 {% endblock script %}
 

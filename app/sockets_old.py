@@ -1,20 +1,25 @@
 from collections import defaultdict
 from app.models import Room
-from flask import request
+from flask import request, current_app
 from flask_login import current_user
 from flask_socketio import leave_room, emit, join_room
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 from app.extensions import db
 from app.models import Message, User
+from app.validators import WebSocketValidator, validate_websocket_data
+from app.state import user_state, conn_mgr, room_mgr
+import logging
 
 DEFAULT_ROOM = 'general_chat'
 
-active_users = defaultdict(dict)  # {room: {user_id: username, }, }
-active_users[DEFAULT_ROOM] = {}  # Сразу добавляем постоянную комнату
-
-# Храним подключенных пользователей
+# Локальный in-memory кеш (fallback для dev)
+active_users = defaultdict(dict)  # {room: {user_id: username}}
+active_users[DEFAULT_ROOM] = {}
 connected_users = {}  # {user_id: socket_id}
-dm_rooms = defaultdict(set)  # {dm_room_id: set(socket_ids)}
+dm_rooms = defaultdict(set)
+
+# Менеджеры состояния уже импортированы из app.state
 
 
 def register_socketio_handlers(socketio):
@@ -35,6 +40,11 @@ def register_socketio_handlers(socketio):
                     socketio.server.disconnect(old_sid)
 
             connected_users[current_user.id] = request.sid
+            # Регистрируем соединение в Redis
+            try:
+                conn_mgr.register_connection(user_id, request.sid)
+            except Exception as e:
+                current_app.logger.warning(f"Redis conn register failed: {e}")
             join_room('app_aware_clients')
             current_user.online = True
             db.session.commit()
@@ -48,15 +58,33 @@ def register_socketio_handlers(socketio):
                 active_users[DEFAULT_ROOM] = {}
 
             active_users[DEFAULT_ROOM][current_user.id] = current_user.username
+            current_app.logger.info(f"Добавили пользователя {current_user.username} (ID: {current_user.id}) в active_users для комнаты {DEFAULT_ROOM}")
+            current_app.logger.info(f"Текущее состояние active_users: {active_users}")
+
+            # Дублируем состояние в Redis
+            try:
+                user_state.ensure_room_exists(DEFAULT_ROOM)
+                user_state.add_user_to_room(user_id, current_user.username, DEFAULT_ROOM)
+            except Exception as e:
+                current_app.logger.warning(f"Redis add_user_to_room failed: {e}")
 
             # Отправляем список пользователей в комнате по умолчанию
-            emit('current_users', {
-                'users': dict(active_users[DEFAULT_ROOM]),
-                'room': DEFAULT_ROOM
-            }, room=DEFAULT_ROOM)
+            try:
+                users = user_state.get_room_users(DEFAULT_ROOM)
+            except Exception:
+                users = dict(active_users[DEFAULT_ROOM])
+            
+            # Убеждаемся, что текущий пользователь включен в список
+            if user_id not in users:
+                users[user_id] = current_user.username
+                
+            current_app.logger.info(f"Отправляем список пользователей: {users} для комнаты {DEFAULT_ROOM}")
+            emit('current_users', {'users': users, 'room': DEFAULT_ROOM}, to=request.sid)
 
             # Отправляем список комнат новому пользователю
-            emit('room_list', {'rooms': get_rooms_list()})
+            rooms_list = get_rooms_list()
+            current_app.logger.info(f"Отправляем список комнат: {rooms_list}")
+            emit('room_list', {'rooms': rooms_list})
 
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -73,6 +101,11 @@ def register_socketio_handlers(socketio):
 
                 # Удаляем пользователя и уведомляем комнату
                 del users[user_id]
+                # Синхронизируем удаление пользователя из комнаты в менеджере состояния (Redis/in-memory)
+                try:
+                    user_state.remove_user_from_room(user_id, room_name)
+                except Exception as e:
+                    current_app.logger.warning(f"Redis remove_user_from_room failed: {e}")
                 leave_room(room_name)
 
                 emit('user_left', {
@@ -93,6 +126,11 @@ def register_socketio_handlers(socketio):
         # Удаляем из подключенных пользователей только если это текущее соединение
         if user_id in connected_users and connected_users[user_id] == request.sid:
             connected_users.pop(user_id, None)
+        # Удаляем соединение в Redis
+        try:
+            conn_mgr.remove_connection(user_id)
+        except Exception as e:
+            current_app.logger.warning(f"Redis remove_connection failed: {e}")
 
         # Обновляем статус
         if user_was_in_any_room:
@@ -100,41 +138,67 @@ def register_socketio_handlers(socketio):
             db.session.commit()
             broadcast_room_list()
 
+    @socketio.on('heartbeat')
+    def handle_heartbeat(data=None):
+        if not current_user.is_authenticated:
+            return
+        try:
+            ttl = None
+            if isinstance(data, dict):
+                ttl = data.get('ttl')
+            conn_mgr.refresh_heartbeat(current_user.id, ttl_seconds=ttl)
+        except Exception as e:
+            current_app.logger.warning(f"Heartbeat refresh failed: {e}")
+
     @socketio.on('create_room')
     def handle_create_room(data):
         """Обработчик создания новой комнаты"""
         if not current_user.is_authenticated:
+            current_app.logger.warning("Попытка создания комнаты неавторизованным пользователем")
             emit('room_created', {'success': False, 'message': 'Не авторизован'})
             return
+            
+        current_app.logger.info(f"Запрос создания комнаты от пользователя {current_user.id}: {data}")
 
-        room_name = data.get('room_name', '').strip()
-
-        if not room_name:
-            emit('room_created', {'success': False, 'message': 'Введите название комнаты'})
+        # Валидация входных данных
+        validation = validate_websocket_data(data, ['room_name'])
+        if not validation['valid']:
+            current_app.logger.warning(f"Ошибка валидации данных: {validation['error']}")
+            emit('room_created', {'success': False, 'message': validation['error']})
             return
 
-        if len(room_name) > 20:
-            emit('room_created', {'success': False, 'message': 'Название слишком длинное (макс. 20 символов)'})
+        # Валидация названия комнаты
+        room_validation = WebSocketValidator.validate_room_name(data.get('room_name'))
+        if not room_validation['valid']:
+            current_app.logger.warning(f"Ошибка валидации названия комнаты: {room_validation['error']}")
+            emit('room_created', {'success': False, 'message': room_validation['error']})
             return
 
-        if len(room_name) < 2:
-            emit('room_created', {'success': False, 'message': 'Название слишком короткое (мин. 2 символа)'})
-            return
+        room_name = room_validation['room_name']
 
         try:
             # Проверяем, нет ли уже такой комнаты
             existing_room = Room.query.filter_by(name=room_name).first()
             if existing_room:
+                current_app.logger.warning(f"Попытка создать существующую комнату: {room_name}")
                 emit('room_created', {'success': False, 'message': 'Комната с таким названием уже существует'})
                 return
 
             # Создаем новую комнату
+            current_app.logger.info(f"Создаем новую комнату: {room_name} пользователем {current_user.id}")
             new_room = Room(
                 name=room_name,
                 created_by=current_user.id
             )
             db.session.add(new_room)
             db.session.commit()
+            current_app.logger.info(f"Комната {room_name} успешно создана в БД")
+
+            # Создаем комнату в Redis (best-effort)
+            try:
+                room_mgr.create_room_if_absent(room_name, current_user.id)
+            except Exception as e:
+                current_app.logger.warning(f"Redis create_room_if_absent failed: {e}")
 
             # автоматически присоединяем создателя к новой комнате
             join_room(room_name)
@@ -142,10 +206,17 @@ def register_socketio_handlers(socketio):
                 active_users[room_name] = {}
             active_users[room_name][current_user.id] = current_user.username
 
+            try:
+                user_state.add_user_to_room(current_user.id, current_user.username, room_name)
+            except Exception as e:
+                current_app.logger.warning(f"Redis add_user_to_room failed: {e}")
+
             # ОТПРАВЛЯЕМ ОБНОВЛЕННЫЙ СПИСОК КОМНАТ ВСЕМ КЛИЕНТАМ
+            current_app.logger.info(f"Отправляем обновленный список комнат")
             broadcast_room_list()
 
             # ОТПРАВЛЯЕМ СОЗДАТЕЛЮ ОТВЕТ С ФЛАГОМ ДЛЯ АВТОПЕРЕХОДА
+            current_app.logger.info(f"Отправляем событие room_created создателю")
             emit('room_created', {
                 'success': True,
                 'room_name': room_name,
@@ -162,7 +233,7 @@ def register_socketio_handlers(socketio):
             }, broadcast=True, include_self=False)
 
         except Exception as e:
-            print(f"Ошибка при создании комнаты: {e}")
+            current_app.logger.error(f"Ошибка при создании комнаты: {e}")
             emit('room_created', {'success': False, 'message': 'Ошибка при создании комнаты'})
             db.session.rollback()
 
@@ -193,6 +264,11 @@ def register_socketio_handlers(socketio):
             if not room_name.startswith('dm_') and current_user.id in users and room_name != new_room_name:
                 leave_room(room_name)
                 del active_users[room_name][current_user.id]
+                # Синхронизируем удаление пользователя из менеджера состояния (Redis/in-memory)
+                try:
+                    user_state.remove_user_from_room(current_user.id, room_name)
+                except Exception as e:
+                    current_app.logger.warning(f"Redis remove_user_from_room failed: {e}")
 
                 emit('user_left', {
                     'user_id': current_user.id,
@@ -245,11 +321,18 @@ def register_socketio_handlers(socketio):
 
         room_name = data.get('room', DEFAULT_ROOM)
 
-        if room_name in active_users:
-            emit('current_users', {
-                'users': dict(active_users[room_name]),
-                'room': room_name
-            }, to=request.sid)
+        # Получаем пользователей из локального кеша
+        users = dict(active_users.get(room_name, {}))
+        
+        # Убеждаемся, что текущий пользователь включен в список
+        if current_user.id not in users:
+            users[current_user.id] = current_user.username
+            
+        current_app.logger.info(f"Запрос списка пользователей для комнаты {room_name}: {users}")
+        emit('current_users', {
+            'users': users,
+            'room': room_name
+        }, to=request.sid)
 
     @socketio.on('send_message')
     def handle_send_message(data):
@@ -257,11 +340,21 @@ def register_socketio_handlers(socketio):
         if not current_user.is_authenticated:
             return
 
-        room_name = data.get('room')
-        message_content = data.get('message', '').strip()
-
-        if not room_name or not message_content:
+        # Валидация входных данных
+        validation = validate_websocket_data(data, ['room', 'message'])
+        if not validation['valid']:
+            emit('message_error', {'error': validation['error']})
             return
+
+        room_name = data.get('room')
+        
+        # Валидация содержимого сообщения
+        message_validation = WebSocketValidator.validate_message_content(data.get('message'))
+        if not message_validation['valid']:
+            emit('message_error', {'error': message_validation['error']})
+            return
+
+        message_content = message_validation['content']
 
         # Сохраняем сообщение в базу данных
         try:
@@ -296,9 +389,8 @@ def register_socketio_handlers(socketio):
             }, room=room_name, include_self=False)  # ИСКЛЮЧАЕМ отправителя
 
         except Exception as e:
-            print(f"Ошибка при сохранении сообщения: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.error(f"Ошибка при сохранении сообщения: {e}")
+            emit('message_error', {'error': 'Ошибка при отправке сообщения'})
             db.session.rollback()
 
     # пагинация обработчика истории сообщений
@@ -319,8 +411,10 @@ def register_socketio_handlers(socketio):
                 emit('load_more_error', {'error': 'Комната не найдена'})
                 return
 
-            # Загружаем сообщения
-            messages = Message.query.filter_by(
+            # Загружаем сообщения с предзагрузкой отправителей
+            messages = Message.query.options(
+                joinedload(Message.sender)
+            ).filter_by(
                 room_id=room.id,
                 is_dm=False
             ).order_by(
@@ -349,7 +443,7 @@ def register_socketio_handlers(socketio):
             })
 
         except Exception as e:
-            print(f"Ошибка при загрузке сообщений: {e}")
+            current_app.logger.error(f"Ошибка при загрузке сообщений: {e}")
             emit('load_more_error', {'error': 'Ошибка загрузки сообщений'})
 
     @socketio.on('get_message_history')
@@ -370,8 +464,10 @@ def register_socketio_handlers(socketio):
             if not room:
                 return
 
-            # Загружаем сообщения с ограничением
-            messages = Message.query.filter_by(
+            # Загружаем сообщения с ограничением и предзагружаем отправителей
+            messages = Message.query.options(
+                joinedload(Message.sender)
+            ).filter_by(
                 room_id=room.id,
                 is_dm=False
             ).order_by(
@@ -402,7 +498,7 @@ def register_socketio_handlers(socketio):
             })
 
         except Exception as e:
-            print(f"Ошибка при загрузке истории сообщений: {e}")
+            current_app.logger.error(f"Ошибка при загрузке истории сообщений: {e}")
             emit('message_history_error', {
                 'error': 'Не удалось загрузить историю сообщений'
             })
@@ -426,8 +522,10 @@ def register_socketio_handlers(socketio):
                 print(f"Получатель с ID {recipient_id} не найден")
                 return
 
-            # Загружаем историю переписки между текущим пользователем и получателем
-            messages = Message.query.filter(
+            # Загружаем историю переписки между текущим пользователем и получателем с предзагрузкой отправителей
+            messages = Message.query.options(
+                joinedload(Message.sender)
+            ).filter(
                 ((Message.sender_id == current_user.id) & (Message.recipient_id == recipient_id)) |
                 ((Message.sender_id == recipient_id) & (Message.recipient_id == current_user.id))
             ).filter_by(is_dm=True).order_by(
@@ -456,7 +554,7 @@ def register_socketio_handlers(socketio):
                 'messages': messages_data
             })
         except Exception as e:
-            print(f"Ошибка при загрузке истории ЛС: {e}")
+            current_app.logger.error(f"Ошибка при загрузке истории ЛС: {e}")
 
     @socketio.on('send_dm')
     def handle_send_dm(data):
@@ -465,12 +563,19 @@ def register_socketio_handlers(socketio):
             return
 
         recipient_id = data.get('recipient_id')
-        message_content = data.get('message', '').strip()
+        message_content_raw = data.get('message', '')
 
-        if not recipient_id or not message_content:
+        if not recipient_id or not message_content_raw:
             return
 
         try:
+            # Валидация содержимого сообщения (аналогично send_message)
+            message_validation = WebSocketValidator.validate_message_content(message_content_raw)
+            if not message_validation['valid']:
+                emit('message_error', {'error': message_validation['error']})
+                return
+            message_content = message_validation['content']
+
             # Сохраняем сообщение в базу данных
             new_message = Message(
                 content=message_content,
@@ -513,7 +618,7 @@ def register_socketio_handlers(socketio):
                 'conversations': get_dm_conversations(current_user.id)
             })
         except Exception as e:
-            print(f"Ошибка при отправке ЛС: {e}")
+            current_app.logger.error(f"Ошибка при отправке ЛС: {e}")
             db.session.rollback()
 
     @socketio.on('update_unread_indicator')
@@ -539,7 +644,7 @@ def register_socketio_handlers(socketio):
                 'conversations': conversations
             })
         except Exception as e:
-            print(f"Ошибка при получении диалогов: {e}")
+            current_app.logger.error(f"Ошибка при получении диалогов: {e}")
 
     @socketio.on('mark_messages_as_read')
     def handle_mark_messages_as_read(data):
@@ -573,7 +678,7 @@ def register_socketio_handlers(socketio):
                 'sender_id': sender_id
             })
         except Exception as e:
-            print(f"Ошибка при пометке сообщений как прочитанных: {e}")
+            current_app.logger.error(f"Ошибка при пометке сообщений как прочитанных: {e}")
             db.session.rollback()
 
 
@@ -584,42 +689,74 @@ def broadcast_room_list():
 
 
 def get_rooms_list():
-    """Возвращает список всех комнат: постоянные + активные с пользователями."""
-    # Всегда включаем комнату по умолчанию
+    """Возвращает список всех комнат: DB + активные (Redis + локальный fallback)."""
     all_rooms = {DEFAULT_ROOM}
 
-    # Добавляем все комнаты из базы данных
-    rooms_from_db = Room.query.all()
-    for room in rooms_from_db:
+    # Из БД
+    for room in Room.query.all():
         all_rooms.add(room.name)
 
-    # Добавляем все комнаты, где есть пользователи (исключаем DM комнаты)
+    # Из локального кеша (fallback)
     for room_name in active_users.keys():
         if not room_name.startswith('dm_'):
             all_rooms.add(room_name)
-    return sorted(list(all_rooms))  # Просто список названий комнат
+
+    # Из Redis (активные комнаты) - используем локальный менеджер
+    try:
+        redis_rooms = room_mgr.get_all_rooms()
+        all_rooms.update(redis_rooms)
+    except Exception as e:
+        current_app.logger.error(f"Error getting rooms from Redis: {e}")
+
+    return sorted(all_rooms)
 
 
 def cleanup_empty_rooms(room_name):
-    """Удаляет комнату из базы, если в ней нет пользователей и это не комната по умолчанию"""
+    """Удаляет комнату если пустая (Redis + локальный fallback)."""
+    current_app.logger.info(f"Проверяем комнату {room_name} на пустоту")
+    
     if room_name == DEFAULT_ROOM:
-        return  # Не удаляем комнату по умолчанию
+        current_app.logger.info(f"Комната {room_name} - это комната по умолчанию, не удаляем")
+        return
 
-    if room_name in active_users and not active_users[room_name]:
-        # Комната пустая - удаляем из active_users
-        del active_users[room_name]
+    # Проверяем локально
+    no_local_users = room_name in active_users and not active_users[room_name]
+    current_app.logger.info(f"Локально в комнате {room_name} пользователей: {len(active_users.get(room_name, {}))}, пустая: {no_local_users}")
 
-        # Удаляем из базы данных
+    # Проверяем Redis - используем локальный менеджер
+    no_redis_users = True
+    try:
+        users = user_state.get_room_users(room_name)
+        no_redis_users = len(users) == 0
+        current_app.logger.info(f"В Redis в комнате {room_name} пользователей: {len(users)}, пустая: {no_redis_users}")
+    except Exception as e:
+        current_app.logger.error(f"Error checking Redis for room {room_name}: {e}")
+
+    if no_local_users and no_redis_users:
+        current_app.logger.info(f"Комната {room_name} пустая, удаляем...")
+        # Удаляем из локального кеша
+        if room_name in active_users:
+            del active_users[room_name]
+
+        # Удаляем из Redis - используем локальный менеджер
+        try:
+            room_mgr.cleanup_empty_room(room_name)
+            room_mgr.remove_room_meta(room_name)
+        except Exception as e:
+            current_app.logger.error(f"Error cleaning Redis for room {room_name}: {e}")
+        
+        # Удаляем из БД
         room = Room.query.filter_by(name=room_name).first()
         if room:
-            # Сначала удаляем все сообщения этой комнаты
             Message.query.filter_by(room_id=room.id).delete()
-            # Затем удаляем саму комнату
             db.session.delete(room)
             db.session.commit()
-
-            # Рассылаем обновленный список комнат
-            broadcast_room_list()
+        
+        # Уведомляем всех клиентов об обновлении списка комнат
+        current_app.logger.info(f"Комната {room_name} успешно удалена, отправляем обновленный список комнат")
+        broadcast_room_list()
+    else:
+        current_app.logger.info(f"Комната {room_name} не пустая, оставляем")
 
 
 def get_dm_conversations(user_id):
@@ -665,6 +802,4 @@ def get_dm_conversations(user_id):
             })
 
     return conversations
-
-
 

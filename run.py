@@ -1,29 +1,57 @@
 import os
-
+import logging
 from flask_migrate import Migrate
 from app.extensions import db
-# from flask_migrate.cli import db
 from gevent import pywsgi
 from geventwebsocket.handler import WebSocketHandler
 from app.__init__ import socketio, create_app
+from app.middleware.security import SecurityMiddleware, RateLimitMiddleware
 
+# Загружаем переменные окружения из .env файла если он существует
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-app_flask = create_app()
-# migrate = Migrate(app_flask, db)
+# Определяем окружение
+environment = os.environ.get('FLASK_ENV', 'development')
 
-app_flask.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'  # SQLite
-app_flask.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app_flask.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0       # 31536000 1 год кеширования или 0 кеширование отключено для разработки
-app_flask.config['VERSION'] = 1.1
+# Создаем приложение с правильной конфигурацией
+if environment == 'production':
+    from config import ProductionConfig
+    app_flask = create_app(ProductionConfig)
+else:
+    from config import DevelopmentConfig
+    app_flask = create_app(DevelopmentConfig)
 
-if __name__ == "__main__":
+# Инициализируем middleware безопасности
+security_middleware = SecurityMiddleware(app_flask)
+rate_limit_middleware = RateLimitMiddleware(app_flask)
 
-    socketio.run(
-        app_flask,
-        host='127.0.0.1',  # Доступ с других устройств сети
-        debug=True,
-        port=5000,
+# Настройка логирования
+if environment == 'production':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
     )
 
-    # app_flask.run(host='127.0.0.1', port=5000, debug=True)
+if __name__ == "__main__":
+    if environment == 'production':
+        # Продакшен настройки
+        socketio.run(
+            app_flask,
+            host='0.0.0.0',
+            port=int(os.environ.get('PORT', 5000)),
+            debug=False,
+            use_reloader=False
+        )
+    else:
+        # Разработка настройки
+        socketio.run(
+            app_flask,
+            host='127.0.0.1',
+            debug=True,
+            port=5000,
+        )
 

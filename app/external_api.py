@@ -1,7 +1,8 @@
 import requests
+from flask import current_app
+from typing import Optional
 
 from app.schemas import GeolocationData, WeatherData
-from config import apikey
 
 
 def get_location_data() -> GeolocationData:
@@ -11,8 +12,7 @@ def get_location_data() -> GeolocationData:
         'Accept': 'application/json',
     }
     try:
-        response = requests.get('https://ipapi.co/json/', headers=headers, ).json()
-        # response.rises_for_status()
+        response = requests.get('https://ipapi.co/json/', headers=headers).json()
         return GeolocationData(
             ip=response['ip'],
             region=response['region'],
@@ -30,15 +30,18 @@ def get_location_data() -> GeolocationData:
             org=response['org'],
         )
     except requests.exceptions.RequestException as e:
-        print(f"Ошибка геолокации: {e}")
+        current_app.logger.error(f"Ошибка геолокации: {e}")
         return GeolocationData()
 
 
-def get_weather_data(lat: float, lon: float, key: str = apikey) -> WeatherData:
-    """ Получает данные о погоде"""
-    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}""&lang='ru'&units=metric"
+def get_weather_data(lat: float, lon: float, key: Optional[str] = None) -> WeatherData:
+    """Получает данные о погоде"""
+    if key is None:
+        key = current_app.config.get('WEATHER_API_KEY')
+    
+    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&lang=ru&units=metric"
     try:
-        response = requests.request(method='get', url=url, ).json()
+        response = requests.request(method='get', url=url).json()
         return WeatherData(
             description=response['weather'][0]['description'],
             icon=response['weather'][0]['icon'],
@@ -52,4 +55,5 @@ def get_weather_data(lat: float, lon: float, key: str = apikey) -> WeatherData:
             name=response['name'],
         )
     except Exception as e:
-        print(f'не удалось получить данные погоды: {e}')
+        current_app.logger.error(f'Не удалось получить данные погоды: {e}')
+        return WeatherData()

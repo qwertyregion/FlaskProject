@@ -9,5 +9,8 @@ flask-socketio==5.3.4
 python-socketio==5.7.2
 eventlet==0.38.2
 flask-migrate==4.1.0
-
-
+redis==4.3.5
+flask-limiter==3.5.0
+flask-talisman==1.1.0
+python-dotenv==0.19.2
+pytest==7.4.4

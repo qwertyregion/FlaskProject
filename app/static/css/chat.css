@@ -1,3 +1,4 @@
+/* ------------------------- ОСНОВНЫЕ ПЕРЕМЕННЫЕ ------------------------------ */
 :root {
     --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -18,6 +19,35 @@
     --error-red: #ff4757;
 }
 
+/* Специальные стили для страницы чата */
+body.chat-page {
+    height: 100vh;
+    overflow: hidden;
+}
+
+body.chat-page .container {
+    height: calc(100vh - 80px); /* Учитываем навигационную панель */
+    padding: 0;
+    margin: 0;
+    max-width: none;
+    margin-top: 80px; /* Отступ для навигационной панели */
+}
+
+body.chat-page main {
+    height: calc(100vh - 80px);
+    padding: 0;
+    margin: 0;
+}
+
+/* Дополнительная проверка для навигационной панели Bootstrap */
+body.chat-page .navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1030;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -30,19 +60,71 @@ body {
     color: var(--text-primary);
     line-height: 1.6;
     overflow-x: hidden;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow-y: hidden; /* Убираем вертикальную прокрутку для body */
+}
+
+/* ------------------------- ЗАГОЛОВОК ЧАТА ------------------------------ */
+.chat-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: var(--bg-card);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 12px 20px;
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    backdrop-filter: blur(10px);
+}
+
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent-cyan);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    transition: var(--transition);
+    background: rgba(0, 224, 255, 0.1);
+    border: 1px solid rgba(0, 224, 255, 0.2);
+}
+
+.back-btn:hover {
+    background: rgba(0, 224, 255, 0.2);
+    border-color: var(--accent-cyan);
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 224, 255, 0.3);
+}
+
+.back-btn span {
+    font-size: 18px;
+    font-weight: bold;
 }
 
 .chat-container {
     display: grid;
     grid-template-columns: 320px 1fr;
     gap: 20px;
-    height: 100vh;
+    height: calc(100vh - 80px); /* Учитываем высоту навигационной панели */
     padding: 20px;
+    padding-top: 100px; /* Отступ сверху для навигационной панели */
     max-width: 1400px;
     margin: 0 auto;
+    overflow: hidden; /* Предотвращаем прокрутку контейнера */
+    box-sizing: border-box; /* Учитываем padding в общей высоте */
+    position: relative; /* Для правильного позиционирования */
 }
 
-/* Sidebar Styles */
+/* ------------------------- БОКОВАЯ ПАНЕЛЬ ------------------------------ */
 .sidebar {
     background: var(--bg-card);
     border-radius: var(--border-radius);
@@ -53,6 +135,9 @@ body {
     box-shadow: var(--shadow-glitch);
     border: 1px solid rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(10px);
+    overflow-y: auto; /* Добавляем прокрутку только для сайдбара */
+    height: 100%; /* Занимаем всю доступную высоту */
+    box-sizing: border-box; /* Учитываем padding в общей высоте */
 }
 
 .sidebar-tabs {
@@ -92,13 +177,7 @@ body {
     display: flex;
 }
 
-:root {
-    /* ... остальные переменные ... */
-    --success-green: #00ff88;
-    --error-red: #ff4757;
-}
-
-/* Скрываем форму создания комнаты по умолчанию */
+/* ------------------------- ФОРМА СОЗДАНИЯ КОМНАТЫ ------------------------------ */
 #room-create {
     display: none !important;
     opacity: 0;
@@ -202,66 +281,9 @@ body {
     75% { transform: translateX(5px); }
 }
 
-/* Успешное создание комнаты */
-.room-created {
-    animation: roomCreated 0.6s ease-out;
-}
 
-@keyframes roomCreated {
-    0% {
-        background: var(--bg-input);
-    }
-    50% {
-        background: rgba(0, 255, 136, 0.1);
-    }
-    100% {
-        background: var(--bg-input);
-    }
-}
 
-/* Кнопка создания комнаты */
-#rooms-tab > button {
-    width: 100%;
-    margin-bottom: 15px;
-    background: var(--secondary-gradient);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-}
-
-#rooms-tab > button:hover {
-    background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
-}
-
-/* Анимация появления новой комнаты в списке */
-@keyframes newRoomHighlight {
-    0% {
-        background: rgba(0, 255, 136, 0.3);
-        transform: scale(1.05);
-    }
-    100% {
-        background: var(--bg-input);
-        transform: scale(1);
-    }
-}
-
-.room-item.new-room {
-    animation: newRoomHighlight 1s ease-out;
-}
-
-/* Адаптивность для формы */
-@media (max-width: 768px) {
-    #room-create {
-        margin: 15px 0;
-    }
-
-    #room-create.active {
-        flex-direction: column;
-    }
-}
-
-/* Room List */
+/* ------------------------- СПИСОК КОМНАТ ------------------------------ */
 #rooms-list, #dm-conversations {
     list-style: none;
     display: flex;
@@ -293,7 +315,7 @@ body {
     background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink));
 }
 
-/* Buttons */
+/* ------------------------- КНОПКИ ------------------------------ */
 button {
     background: var(--primary-gradient);
     color: white;
@@ -313,7 +335,7 @@ button:hover {
     box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
 }
 
-/* Main Content */
+/* ------------------------- ОСНОВНОЕ СОДЕРЖИМОЕ ------------------------------ */
 .main-content {
     display: flex;
     flex-direction: column;
@@ -322,14 +344,22 @@ button:hover {
     overflow: hidden;
     box-shadow: var(--shadow-glitch);
     border: 1px solid rgba(255, 255, 255, 0.1);
+    height: 100%; /* Занимает всю доступную высоту */
+    box-sizing: border-box; /* Учитываем padding в общей высоте */
 }
 
 .main-content > h1 {
-    padding: 24px;
+    padding: 16px 20px; /* Уменьшаем отступы */
     background: var(--primary-gradient);
-    font-size: 24px;
+    font-size: 20px; /* Уменьшаем размер шрифта */
     font-weight: 800;
     text-align: center;
+    margin: 0;
+    flex-shrink: 0; /* Заголовок не сжимается */
+    min-height: 60px; /* Фиксированная минимальная высота */
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 #current-room {
@@ -337,11 +367,13 @@ button:hover {
     text-shadow: 0 0 10px rgba(0, 224, 255, 0.5);
 }
 
-/* Users List */
+/* ------------------------- СПИСОК ПОЛЬЗОВАТЕЛЕЙ ------------------------------ */
 #users-list {
-    padding: 20px;
+    padding: 12px 16px; /* Уменьшаем отступы */
     background: var(--bg-input);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0; /* Список пользователей не сжимается */
+    min-height: 80px; /* Фиксированная минимальная высота */
 }
 
 #users-list h3 {
@@ -362,143 +394,182 @@ button:hover {
     gap: 10px;
 }
 
-.active-users li {
-    margin-bottom: 5px;
-    padding: 3px 0;
-    list-style: none;
+#active-users li {
+    background: linear-gradient(135deg, var(--bg-tertiary), rgba(99, 102, 241, 0.1));
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.active-users li:hover {
-    background-color: #f8f9fa;
-    border-radius: 3px;
+#active-users li:hover {
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
 }
 
-/* Chat Box */
+/* ------------------------- СТИЛИ СООБЩЕНИЙ ------------------------------ */
 #chat-box {
     flex: 1;
-    padding: 24px;
+    padding: 16px 20px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    background: rgba(0, 0, 0, 0.2);
+    gap: 6px;
+    background: linear-gradient(135deg, rgba(26, 27, 35, 0.98) 0%, rgba(20, 21, 28, 0.98) 100%);
+    min-height: 0; /* Позволяет flex-элементу сжиматься */
+    max-height: calc(100vh - 200px); /* Ограничиваем максимальную высоту */
 }
 
-/* Анимация появления */
+/* Контейнер сообщения */
+.message {
+    max-width: 78%;
+    padding: 0;
+    margin: 3px 0;
+    position: relative;
+    animation: messageAppear 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    display: flex;
+    flex-direction: column;
+}
+
 @keyframes messageAppear {
     from {
         opacity: 0;
-        transform: translateY(10px);
+        transform: translateY(10px) scale(0.97);
     }
     to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
     }
 }
 
-
-
-/* Основные стили сообщений */
-.message {
-    margin: 12px 0;
-    padding: 12px 16px;
-    border-radius: 12px;
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    line-height: 1.5;
-    max-width: 80%;
-    word-wrap: break-word;
+/* Базовый стиль для всех сообщений */
+.message-bubble {
+    padding: 10px 14px;
+    border-radius: 16px;
     position: relative;
-    animation: messageAppear 0.3s ease;
+    word-wrap: break-word;
+    line-height: 1.3;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 }
 
 /* Сообщения других пользователей */
-.message:not(.my-message) {
-    margin-right: auto;
-    border-left: 4px solid #4CAF50;
-    background: #47f7077b;
-}
-
-@keyframes messageSlide {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+.message:not(.my-message) .message-bubble {
+    background: linear-gradient(135deg, #3a3b4a 0%, #2d2e3c 100%);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom-left-radius: 5px;
+    align-self: flex-start;
 }
 
 /* Мои сообщения */
-.message.my-message {
-    margin-left: auto;
-    background: #e8fc057b;
-    border: 1px solid #90caf9;
-    border-right: 4px solid #2196F3;
-    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
+.message.my-message .message-bubble {
+    background: linear-gradient(135deg, var(--accent-purple) 0%, #764ba2 100%);
+    border-bottom-right-radius: 5px;
+    align-self: flex-end;
+    color: white;
 }
 
-.my-message {
-    background: var(--primary-gradient);
-    margin-left: auto;
-    border-bottom-right-radius: 8px;
+/* Контейнер для метаданных и содержимого в одной строке */
+.message-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+    flex-wrap: wrap;
+    line-height: 1.2;
 }
 
-.their-message {
-    background: var(--bg-input);
-    margin-right: auto;
-    border-bottom-left-radius: 8px;
-}
-
-/* Заголовки сообщений */
-.message strong {
-    color: #2c3e50;
+/* Имя отправителя */
+.message-sender {
     font-weight: 600;
-    font-size: 14px;
-    display: block;
-    margin-bottom: 4px;
+    font-size: 13px;
+    color: var(--accent-cyan);
+    white-space: nowrap;
 }
 
-.message.my-message strong {
-    color: #1565c0;
+.message.my-message .message-sender {
+    color: rgba(255, 255, 255, 0.95);
+    font-weight: 500;
 }
 
-.message small {
-    font-size: 11px;
-    opacity: 0.7;
-    margin-left: 10px;
+/* Время сообщения */
+.message-time {
+    color: var(--text-secondary);
+    font-size: 10px;
+    opacity: 0.85;
+    white-space: nowrap;
+    font-weight: 400;
+}
+
+.message.my-message .message-time {
+    color: rgba(255, 255, 255, 0.75);
+}
+
+/* Разделитель между временем и сообщением */
+.message-separator {
+    color: var(--text-secondary);
+    margin: 0 4px;
+    opacity: 0.6;
+    font-size: 10px;
+}
+
+.message.my-message .message-separator {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Содержимое сообщения в той же строке */
+.message-content {
+    display: inline;
+    font-size: 13px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    margin: 0;
+    font-weight: 400;
+}
+
+.message:not(.my-message) .message-content {
+    color: var(--text-primary);
 }
 
 .message.my-message .message-content {
-    color: #1a237e;
+    color: white;
 }
 
-
-
-/* Убедимся, что все элементы имеют правильные цвета */
-.message * {
-    color: inherit !important;
-}
-
+/* Уведомления системные */
 .notification {
+    align-self: center;
     text-align: center;
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+    font-size: 11px;
     color: var(--text-secondary);
-    font-size: 14px;
-    padding: 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
-    margin: 10px 0;
+    margin: 6px 0;
+    max-width: 80%;
+    font-style: italic;
+    border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-/* Message Form */
+/* Эффекты при наведении */
+.message-bubble:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+    transition: all 0.15s ease;
+}
+
+/* ------------------------- ФОРМА ОТПРАВКИ ------------------------------ */
 #message-form {
     display: flex;
-    padding: 20px;
+    padding: 12px 16px; /* Уменьшаем отступы */
     gap: 12px;
     background: var(--bg-input);
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0; /* Форма не сжимается */
+    min-height: 70px; /* Фиксированная минимальная высота */
+    align-items: center; /* Выравниваем элементы по центру */
 }
 
 #message-input {
@@ -521,6 +592,121 @@ button:hover {
 #message-input::placeholder {
     color: var(--text-secondary);
 }
+
+/* ------------------------- АДАПТИВНОСТЬ ------------------------------ */
+@media (max-width: 768px) {
+    .chat-container {
+        grid-template-columns: 1fr;
+        padding: 10px;
+        height: calc(100vh - 80px); /* Учитываем навигационную панель */
+        padding-top: 100px; /* Отступ для навигационной панели */
+        gap: 10px;
+    }
+
+    .sidebar {
+        order: 2;
+        max-height: 40vh; /* Ограничиваем высоту сайдбара на мобильных */
+        overflow-y: auto;
+        height: auto; /* Автоматическая высота */
+    }
+
+    .main-content {
+        order: 1;
+        height: 60vh; /* Ограничиваем высоту основного контента */
+        margin-bottom: 0;
+    }
+
+    .message {
+        max-width: 88%;
+    }
+
+    .message-bubble {
+        padding: 8px 12px;
+    }
+
+    .message-header {
+        gap: 5px;
+    }
+
+    .message-sender {
+        font-size: 12px;
+    }
+
+    .message-time {
+        font-size: 9px;
+    }
+
+    .message-content {
+        font-size: 12px;
+    }
+    
+    .chat-header {
+        padding: 10px 15px;
+    }
+    
+    .back-btn {
+        font-size: 13px;
+        padding: 6px 12px;
+    }
+}
+
+/* Дополнительные медиа-запросы для очень маленьких экранов */
+@media (max-height: 600px) {
+    .chat-container {
+        height: calc(100vh - 80px);
+        padding: 8px;
+        padding-top: 90px; /* Уменьшенный отступ для маленьких экранов */
+    }
+    
+    .main-content > h1 {
+        padding: 12px 16px;
+        font-size: 18px;
+        min-height: 50px;
+    }
+    
+    #users-list {
+        padding: 8px 12px;
+        min-height: 60px;
+    }
+    
+    #message-form {
+        padding: 8px 12px;
+        min-height: 60px;
+    }
+    
+    .sidebar {
+        padding: 12px;
+        gap: 10px;
+    }
+    
+    #chat-box {
+        max-height: calc(100vh - 200px);
+    }
+}
+
+/* ------------------------- СКРОЛЛБАР ------------------------------ */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-input);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--accent-purple);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-pink);
+}
+
+
+
+
+
 
 /* DM Specific Styles */
 .dm-conversation {
@@ -741,25 +927,6 @@ button:hover {
     color: #0056b3;
     background-color: #f0f8ff;
     text-decoration: none;
-}
-
-/* Scrollbar Styling */
-::-webkit-scrollbar {
-    width: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--bg-input);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--accent-purple);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-pink);
 }
 
 /* Animations */
