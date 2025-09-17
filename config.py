@@ -52,6 +52,19 @@ class DevelopmentConfig(Config):
     SESSION_COOKIE_SAMESITE = 'Lax'  # Более мягкие настройки для разработки
 
 
+class TestingConfig(Config):
+    TESTING = True
+    DEBUG = False
+    WTF_CSRF_ENABLED = False  # Отключаем CSRF для тестов
+    
+    # Используем in-memory SQLite для тестов
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    
+    # Redis для тестов (если доступен)
+    REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/1')
+    
+
+
 class ProductionConfig(Config):
     DEBUG = False
     TESTING = False
@@ -64,14 +77,7 @@ class ProductionConfig(Config):
     
     # Дополнительные настройки безопасности для продакшена
     PREFERRED_URL_SCHEME = 'https'  # Принудительное использование HTTPS
-    MAX_CONTENT_LENGTH = 8 * 1024 * 1024  # 8MB максимум в продакшене
-
-
-class TestingConfig(Config):
-    TESTING = True
-    WTF_CSRF_ENABLED = False
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-
+    MAX_CONTENT_LENGTH = 8 * 1024 * 1024  # 8MB максимум в продакшен
 
 # Конфигурация по умолчанию
 config = {

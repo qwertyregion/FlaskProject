@@ -11,29 +11,96 @@ class SocketHandlers {
     }
 
     setupHandlers() {
+        console.log('🔵 [SOCKET DEBUG] Регистрируем обработчики событий');
+        
+        // Общий обработчик для всех событий (для отладки)
+        this.socket.onAny((eventName, ...args) => {
+            console.log(`🔵 [SOCKET DEBUG] Получено событие: ${eventName}`, args);
+            console.log(`🔵 [SOCKET DEBUG] Socket ID: ${this.socket.id}`);
+            console.log(`🔵 [SOCKET DEBUG] Current User:`, window.currentUser);
+        });
+        
         // Основные события подключения
-        this.socket.on('connect', () => this.handleConnect());
-        this.socket.on('disconnect', () => this.handleDisconnect());
+        this.socket.on('connect', () => {
+            console.log('🔵 [SOCKET DEBUG] Событие connect получено');
+            this.handleConnect();
+        });
+        this.socket.on('disconnect', () => {
+            console.log('🔵 [SOCKET DEBUG] Событие disconnect получено');
+            this.handleDisconnect();
+        });
 
         // События комнат
-        this.socket.on('room_list', (data) => this.handleRoomList(data));
-        this.socket.on('current_users', (data) => this.handleCurrentUsers(data));
-        this.socket.on('user_joined', (data) => this.handleUserJoined(data));
-        this.socket.on('user_left', (data) => this.handleUserLeft(data));
-        this.socket.on('room_created', (data) => this.handleRoomCreated(data));
+        this.socket.on('room_list', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие room_list получено:', data);
+            this.handleRoomList(data);
+        });
+        this.socket.on('current_users', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие current_users получено:', data);
+            this.handleCurrentUsers(data);
+        });
+        this.socket.on('user_joined', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие user_joined получено:', data);
+            this.handleUserJoined(data);
+        });
+        this.socket.on('user_left', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие user_left получено:', data);
+            this.handleUserLeft(data);
+        });
+        this.socket.on('room_created', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие room_created получено:', data);
+            this.handleRoomCreated(data);
+        });
 
         // События сообщений
-        this.socket.on('new_message', (data) => this.handleNewMessage(data));
-        this.socket.on('message_history', (data) => this.handleMessageHistory(data));
-        this.socket.on('more_messages_loaded', (data) => this.handleMoreMessagesLoaded(data));
-        this.socket.on('load_more_error', (data) => this.handleLoadMoreError(data));
+        this.socket.on('new_message', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие new_message получено:', data);
+            this.handleNewMessage(data);
+        });
+        this.socket.on('message_history', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие message_history получено:', data);
+            this.handleMessageHistory(data);
+        });
+        this.socket.on('more_messages_loaded', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие more_messages_loaded получено:', data);
+            this.handleMoreMessagesLoaded(data);
+        });
+        this.socket.on('load_more_error', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие load_more_error получено:', data);
+            this.handleLoadMoreError(data);
+        });
 
         // События личных сообщений
-        this.socket.on('dm_conversations', (data) => this.handleDMConversations(data));
-        this.socket.on('new_dm', (data) => this.handleNewDM(data));
-        this.socket.on('dm_history', (data) => this.handleDMHistory(data));
-        this.socket.on('update_unread_indicator', (data) => this.handleUpdateUnreadIndicator(data));
-        this.socket.on('messages_marked_read', (data) => this.handleMessagesMarkedRead(data));
+        this.socket.on('dm_conversations', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие dm_conversations получено:', data);
+            this.handleDMConversations(data);
+        });
+        this.socket.on('new_dm', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие new_dm получено:', data);
+            this.handleNewDM(data);
+        });
+        this.socket.on('dm_history', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие dm_history получено:', data);
+            this.handleDMHistory(data);
+        });
+        this.socket.on('update_unread_indicator', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие update_unread_indicator получено:', data);
+            this.handleUpdateUnreadIndicator(data);
+        });
+        this.socket.on('messages_marked_read', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие messages_marked_read получено:', data);
+            this.handleMessagesMarkedRead(data);
+        });
+        this.socket.on('dm_sent', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие dm_sent получено:', data);
+            this.handleDMSent(data);
+        });
+        this.socket.on('dm_error', (data) => {
+            console.log('🔵 [SOCKET DEBUG] Событие dm_error получено:', data);
+            this.handleDMError(data);
+        });
+        
+        console.log('✅ [SOCKET DEBUG] Все обработчики событий зарегистрированы');
     }
 
     handleConnect() {
@@ -41,21 +108,19 @@ class SocketHandlers {
             return;
         }
 
-        console.log('Подключение к серверу установлено');
-        console.log('Текущий пользователь:', window.currentUser);
+        console.log('🔵 [CLIENT DEBUG] Подключение к серверу установлено');
+        console.log('🔵 [CLIENT DEBUG] Socket ID:', this.socket.id);
+        console.log('🔵 [CLIENT DEBUG] Current User:', window.currentUser);
+        console.log('🔵 [CLIENT DEBUG] Socket connected:', this.socket.connected);
         
-        // Инициализируем чат и вкладки
+        // Инициализируем чат и вкладки (initChat() автоматически присоединится к комнате)
         this.chatUI.initChat();
         this.chatUI.initTabs();
 
         // Автоматически загружаем диалоги при подключении
         if (this.dmHandler) {
-            if (this.dmHandler) {
-                this.dmHandler.loadDMConversations();
-            }
+            this.dmHandler.loadDMConversations();
         }
-
-        // Сервер отправит 'current_users' на connect и на join_room, не дергаем лишний запрос
     }
 
     handleDisconnect() {
@@ -71,7 +136,6 @@ class SocketHandlers {
     }
 
     handleRoomList(data) {
-        console.log('Получен список комнат:', data.rooms);
         if (this.chatUI) {
             this.chatUI.updateRoomList(data.rooms);
         } else {
@@ -178,8 +242,6 @@ class SocketHandlers {
     }
 
     handleMoreMessagesLoaded(data) {
-        console.log('Получены дополнительные сообщения:', data.messages?.length, 'для комнаты:', data.room);
-
         if (this.chatUI.virtualizedChat && data.room === this.chatUI.currentRoom && (!this.dmHandler || !this.dmHandler.isInDMMode)) {
             this.chatUI.virtualizedChat.handleNewMessages(data);
         }
@@ -201,20 +263,45 @@ class SocketHandlers {
     }
 
     handleNewDM(data) {
+        console.log('🔵 [CLIENT DEBUG] handleNewDM вызван с данными:', data);
+        
         if (this.dmHandler) {
-            const isForCurrentDM = this.dmHandler.currentDMRecipient &&
-                (this.dmHandler.currentDMRecipient == data.sender_id || this.dmHandler.currentDMRecipient == data.recipient_id);
+            console.log('🔵 [CLIENT DEBUG] dmHandler найден');
+            console.log('🔵 [CLIENT DEBUG] currentDMRecipient:', this.dmHandler.currentDMRecipient);
+            console.log('🔵 [CLIENT DEBUG] data.sender_id:', data.sender_id);
+            console.log('🔵 [CLIENT DEBUG] data.recipient_id:', data.recipient_id);
+            console.log('🔵 [CLIENT DEBUG] currentUser.id:', window.currentUser?.id);
+            
+            // ИСПРАВЛЕНО: Проверяем, что получатель - это текущий пользователь
+            const isForCurrentUser = data.recipient_id == window.currentUser?.id;
+            
+            // И проверяем, что пользователь находится в диалоге с отправителем
+            const isInActiveDialog = this.dmHandler.isInDMMode && 
+                                   this.dmHandler.currentDMRecipient == data.sender_id;
+            
+            const isForCurrentDM = isForCurrentUser && isInActiveDialog;
+
+            console.log('🔵 [CLIENT DEBUG] isForCurrentUser:', isForCurrentUser);
+            console.log('🔵 [CLIENT DEBUG] isInDMMode:', this.dmHandler.isInDMMode);
+            console.log('🔵 [CLIENT DEBUG] isInActiveDialog:', isInActiveDialog);
+            console.log('🔵 [CLIENT DEBUG] isForCurrentDM:', isForCurrentDM);
 
             if (isForCurrentDM) {
+                console.log('🔵 [CLIENT DEBUG] Сообщение для текущего диалога, добавляем сообщение БЕЗ индикаторов');
                 this.dmHandler.addDMMessage(data);
-                this.socket.emit('mark_messages_as_read', { sender_id: data.sender_id });
-            } else {
+                // ИСПРАВЛЕНО: Помечаем сообщение как прочитанное, так как пользователь его видит
+                console.log('🔵 [CLIENT DEBUG] Помечаем сообщение как прочитанное (пользователь в активном диалоге)');
+                window.socket.emit('mark_messages_as_read', { sender_id: data.sender_id });
+            } else if (isForCurrentUser) {
+                console.log('🔵 [CLIENT DEBUG] Сообщение для текущего пользователя, но не в активном диалоге - добавляем индикаторы');
                 this.dmHandler.showDMNotification(data);
-                this.dmHandler.updateUnreadCount(data.sender_id);
-                if (this.dmHandler) {
-                this.dmHandler.loadDMConversations();
+                this.dmHandler.updateUnreadCount(data.sender_id, data.sender_username);
+                // ИСПРАВЛЕНО: НЕ вызываем updateTabIndicatorFromCurrentState - это делается в updateUnreadCount
+            } else {
+                console.log('🔵 [CLIENT DEBUG] Сообщение не для текущего пользователя');
             }
-            }
+        } else {
+            console.log('🔴 [CLIENT DEBUG] dmHandler не найден!');
         }
     }
 
@@ -236,8 +323,26 @@ class SocketHandlers {
         if (currentConversation) {
             currentConversation.classList.add('active');
             currentConversation.classList.remove('has-unread');
+            
+            // Получаем количество непрочитанных сообщений до их удаления
             const badge = currentConversation.querySelector('.unread-badge');
-            if (badge) badge.remove();
+            let unreadCount = 0;
+            if (badge) {
+                unreadCount = parseInt(badge.textContent) || 0;
+                console.log(`🔵 [CLIENT DEBUG] handleDMHistory: было непрочитанных сообщений: ${unreadCount}`);
+                badge.remove();
+            }
+            
+            // Удаляем unread-line
+            const unreadLine = currentConversation.querySelector('.unread-line');
+            if (unreadLine) unreadLine.remove();
+            
+            // Обновляем общий счетчик и индикатор на вкладке
+            if (unreadCount > 0) {
+                this.dmHandler.totalUnreadCount = Math.max(0, this.dmHandler.totalUnreadCount - unreadCount);
+                console.log(`🔵 [CLIENT DEBUG] handleDMHistory: общий счетчик уменьшен на ${unreadCount}, новый totalUnreadCount: ${this.dmHandler.totalUnreadCount}`);
+                this.dmHandler.updateTabIndicatorSimple();
+            }
         }
 
         // Очистка чата и отрисовка истории
@@ -255,18 +360,59 @@ class SocketHandlers {
     }
 
     handleUpdateUnreadIndicator(data) {
-        console.log('Обновление индикатора для отправителя:', data.sender_id);
-        if (this.dmHandler) {
-            this.dmHandler.updateUnreadIndicator(data.sender_id, data.username);
-        }
+        console.log('🔵 [CLIENT DEBUG] handleUpdateUnreadIndicator вызван для:', data.sender_id);
+        // ИСПРАВЛЕНО: НЕ вызываем updateUnreadIndicator здесь - это уже делается в handleNewDM
+        // this.dmHandler.updateUnreadIndicator(data.sender_id, data.username);
     }
 
     handleMessagesMarkedRead(data) {
         if (data.success) {
             console.log('Сообщения помечены как прочитанные для отправителя:', data.sender_id);
+            // ИСПРАВЛЕНО: не перезагружаем диалоги, только обновляем индикаторы
             if (this.dmHandler) {
-                this.dmHandler.loadDMConversations();
+                // Обновляем только индикаторы непрочитанных, не перезагружая весь список
+                this.dmHandler.updateUnreadIndicatorsOnly(data.sender_id);
             }
+        }
+    }
+
+    handleDMSent(data) {
+        console.log('🔵 [CLIENT DEBUG] handleDMSent вызван с данными:', data);
+        
+        if (data.success) {
+            console.log('✅ [CLIENT DEBUG] Сообщение успешно отправлено');
+            console.log('🔵 [CLIENT DEBUG] Получатель:', data.recipient_username);
+            console.log('🔵 [CLIENT DEBUG] ID сообщения:', data.message_id);
+            
+            if (data.offline) {
+                console.log('🔵 [CLIENT DEBUG] Получатель не в сети, сообщение сохранено');
+                this.chatUI.addNotification(`Сообщение отправлено пользователю ${data.recipient_username} (не в сети)`);
+            } else {
+                console.log('🔵 [CLIENT DEBUG] Получатель в сети, сообщение доставлено');
+                this.chatUI.addNotification(`Сообщение отправлено пользователю ${data.recipient_username}`);
+            }
+        } else {
+            console.error('🔴 [CLIENT DEBUG] Ошибка отправки сообщения');
+            this.chatUI.addNotification('Ошибка отправки сообщения', 'error');
+        }
+    }
+
+    handleDMError(data) {
+        console.log('🔵 [CLIENT DEBUG] handleDMError вызван с данными:', data);
+        
+        const errorMessage = data.error || 'Неизвестная ошибка';
+        console.error('🔴 [CLIENT DEBUG] Ошибка DM:', errorMessage);
+        
+        // Показываем уведомление об ошибке
+        this.chatUI.addNotification(`Ошибка: ${errorMessage}`, 'error');
+        
+        // Если это ошибка валидации, можно добавить специальную обработку
+        if (errorMessage.includes('самому себе')) {
+            console.log('🔵 [CLIENT DEBUG] Попытка отправить сообщение самому себе');
+        } else if (errorMessage.includes('не найден')) {
+            console.log('🔵 [CLIENT DEBUG] Получатель не найден');
+        } else if (errorMessage.includes('не аутентифицирован')) {
+            console.log('🔵 [CLIENT DEBUG] Пользователь не аутентифицирован');
         }
     }
 }

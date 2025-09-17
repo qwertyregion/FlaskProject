@@ -5,29 +5,24 @@
 {% endblock link %}
 
 {% block script %}
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <!-- Модульная версия чата -->
-    <script src="{{ url_for('static', filename='js/modules/socket-handlers.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modules/chat-ui.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modules/dm-handler.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modules/virtualized-chat.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/chat-modular.js') }}"></script>
-    <script>
-        // Инициализация пользовательских данных
-        window.currentUser = {
-            id: {{ current_user.id }},
-            username: "{{ current_user.username }}"
-        };
-        
-        // Добавляем класс для страницы чата
-        document.body.classList.add('chat-page');
-    </script>
+    <!-- Скрипты будут загружены в конце страницы -->
 {% endblock script %}
 
 {% block style %}  {% endblock style %}
 
 {% block content %}
 
+    {% if not current_user.is_authenticated %}
+    <div class="alert alert-danger" role="alert">
+        <h4 class="alert-heading">Ошибка доступа!</h4>
+        <p>Для использования чата необходимо войти в систему.</p>
+        <hr>
+        <p class="mb-0">
+            <a href="{{ url_for('auth.login') }}" class="btn btn-primary">Войти</a>
+            <a href="{{ url_for('auth.register') }}" class="btn btn-secondary">Регистрация</a>
+        </p>
+    </div>
+    {% else %}
     <div class="chat-container">
         <!-- Боковая панель с комнатами -->
         <div class="sidebar">
@@ -76,8 +71,27 @@
             </form>
         </div>
     </div>
+    {% endif %}
 
-
-
+    <!-- Загружаем скрипты в конце страницы -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <!-- Данные пользователя -->
+    <div id="user-data" 
+         data-user-id="{% if current_user.is_authenticated %}{{ current_user.id }}{% else %}null{% endif %}"
+         data-username="{% if current_user.is_authenticated %}{{ current_user.username|e }}{% else %}null{% endif %}"
+         data-email="{% if current_user.is_authenticated %}{{ current_user.email|e }}{% else %}null{% endif %}"
+         data-authenticated="{% if current_user.is_authenticated %}true{% else %}false{% endif %}"
+         style="display: none;">
+    </div>
+    
+    <!-- Загружаем модули чата -->
+    <script src="{{ url_for('static', filename='js/modules/user-init.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/dm-handler.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/chat-ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/socket-handlers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modules/virtualized-chat.js') }}"></script>
+    
+    <!-- Основной файл чата -->
+    <script src="{{ url_for('static', filename='js/chat-modular.js') }}"></script>
 
 {% endblock %}

@@ -3,8 +3,14 @@
  * Использует модульную архитектуру для лучшей организации кода
  */
 
+console.log('🔵 [CLIENT DEBUG] chat-modular.js загружен');
+
 // Инициализация глобальных переменных
 window.isPageUnloading = false;
+
+// ВРЕМЕННО: Включаем логи для отладки DM
+window.CHAT_DEBUG = true;
+console.log('🔵 [CLIENT DEBUG] CHAT_DEBUG включен');
 
 // Отключаем лишние консольные логи на странице чата, оставляя предупреждения и ошибки
 if (!window.CHAT_DEBUG) {
@@ -15,22 +21,50 @@ if (!window.CHAT_DEBUG) {
     } catch (e) {}
 }
 
-// Проверяем, инициализирован ли currentUser в шаблоне
+// Проверяем, инициализирован ли currentUser модулем user-init.js
 if (!window.currentUser) {
-    console.warn('currentUser не инициализирован в шаблоне!');
-    window.currentUser = {
-        id: 1,
-        username: "Unknown"
-    };
+    console.warn('🔴 [INIT DEBUG] currentUser не инициализирован модулем user-init.js!');
+} else {
+    console.log('✅ [INIT DEBUG] currentUser инициализирован:', window.currentUser);
 }
-
-console.log('Инициализированный currentUser:', window.currentUser);
 
 // Инициализация Socket.IO
 window.socket = io();
 
+// Проверяем состояние Socket.IO
+console.log('🔵 [SOCKET DEBUG] Socket.IO инициализирован');
+console.log('🔵 [SOCKET DEBUG] Socket состояние:', window.socket.connected ? 'подключен' : 'отключен');
+console.log('🔵 [SOCKET DEBUG] Socket ID:', window.socket.id);
+
+// Обработчики состояния Socket.IO
+window.socket.on('connect', () => {
+    console.log('✅ [SOCKET DEBUG] Socket.IO подключен, ID:', window.socket.id);
+});
+
+window.socket.on('disconnect', () => {
+    console.log('🔴 [SOCKET DEBUG] Socket.IO отключен');
+});
+
+window.socket.on('connect_error', (error) => {
+    console.error('🔴 [SOCKET DEBUG] Ошибка подключения Socket.IO:', error);
+});
+
 // Инициализация модулей
 let chatUI, dmHandler, socketHandlers;
+
+// Безопасная функция для работы с classList
+function safeClassList(element, method, className) {
+    if (!element || !element.classList) {
+        console.warn(`🔴 [SAFE DEBUG] Элемент не найден или не имеет classList:`, element);
+        return false;
+    }
+    try {
+        return element.classList[method](className);
+    } catch (error) {
+        console.error(`🔴 [SAFE DEBUG] Ошибка с classList.${method}:`, error);
+        return false;
+    }
+}
 
 // Обработчик загрузки DOM
 document.addEventListener('DOMContentLoaded', function() {
@@ -56,8 +90,10 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
         // Сначала создаем dmHandler
         dmHandler = new DMHandler();
+        console.log('🔵 [CLIENT DEBUG] dmHandler создан:', dmHandler);
         // Делаем обработчик ЛС доступным глобально для кликов из списка пользователей и других модулей
         window.dmHandler = dmHandler;
+        console.log('🔵 [CLIENT DEBUG] window.dmHandler установлен:', window.dmHandler);
         
         // Затем создаем chatUI и передаем dmHandler
         chatUI = new ChatUI();

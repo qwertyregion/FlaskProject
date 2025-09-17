@@ -16,6 +16,10 @@ class VirtualizedChat {
     }
 
     setupScrollHandler() {
+        if (!this.container) {
+            return;
+        }
+
         this.container.addEventListener('scroll', () => {
             if (this.isNearTop(this.container) && this.hasMore && !this.isLoading) {
                 this.loadMoreMessages();
@@ -49,7 +53,9 @@ class VirtualizedChat {
     }
 
     loadMoreMessages() {
-        if (this.isLoading || !this.hasMore || this.currentRoom !== window.chatUI?.currentRoom) return;
+        if (this.isLoading || !this.hasMore || this.currentRoom !== window.chatUI?.currentRoom) {
+            return;
+        }
 
         this.isLoading = true;
         this.loadMoreBtn.textContent = 'Загрузка...';
@@ -63,7 +69,9 @@ class VirtualizedChat {
     }
 
     handleNewMessages(data) {
-        if (data.room !== window.chatUI?.currentRoom) return;
+        if (data.room !== window.chatUI?.currentRoom) {
+            return;
+        }
 
         this.isLoading = false;
         this.loadMoreBtn.disabled = false;

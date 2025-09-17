@@ -36,37 +36,7 @@ class WebSocketEvents:
     
     def handle_leave_room(self, data: Dict) -> None:
         """Обработчик выхода из комнаты"""
-        if not current_user.is_authenticated:
-            return
-        
-        room_name = data.get('room', '').strip()
-        if not room_name:
-            return
-        
-        user_id = current_user.id
-        username = current_user.username
-        
-        # Выходим из комнаты
-        leave_room(room_name)
-        
-        # Удаляем из локального кеша
-        if room_name in self.websocket_service.active_users:
-            if user_id in self.websocket_service.active_users[room_name]:
-                del self.websocket_service.active_users[room_name][user_id]
-        
-        # Удаляем из Redis
-        try:
-            from app.state import user_state
-            user_state.remove_user_from_room(user_id, room_name)
-        except Exception as e:
-            current_app.logger.warning(f"Redis remove_user_from_room failed: {e}")
-        
-        # Уведомляем других пользователей
-        emit('user_left', {
-            'user_id': user_id,
-            'username': username,
-            'room': room_name
-        }, room=room_name, include_self=False)
+        self.websocket_service.handle_leave_room(data)
     
     def handle_get_current_users(self, data: Dict) -> None:
         """Обработчик получения списка пользователей в комнате"""
@@ -90,13 +60,16 @@ class WebSocketEvents:
     def handle_load_more_messages(self, data: Dict) -> None:
         """Обработчик загрузки дополнительных сообщений"""
         if not current_user.is_authenticated:
+            current_app.logger.warning("EVENTS LOAD MORE: Пользователь не авторизован")
             return
         
         room_name = data.get('room', '').strip()
         offset = data.get('offset', 0)
         limit = data.get('limit', 20)
         
+        
         if not room_name:
+            current_app.logger.warning("EVENTS LOAD MORE: Комната не указана")
             emit('load_more_error', {'error': 'Комната не указана'})
             return
         
@@ -110,13 +83,14 @@ class WebSocketEvents:
         messages = MessageService.get_room_messages(room.id, limit, offset)
         
         if messages:
-            emit('more_messages', {
+            emit('more_messages_loaded', {
                 'messages': messages,
                 'room': room_name,
-                'offset': offset
+                'offset': offset + len(messages),
+                'has_more': len(messages) == limit
             })
         else:
-            emit('no_more_messages', {'room': room_name})
+            emit('load_more_error', {'error': 'Нет дополнительных сообщений'})
     
     def handle_get_message_history(self, data: Dict) -> None:
         """Обработчик получения истории сообщений"""
@@ -140,7 +114,8 @@ class WebSocketEvents:
         # Отправляем историю
         emit('message_history', {
             'messages': messages,
-            'room': room_name
+            'room': room_name,
+            'has_more': len(messages) == limit
         })
     
     def handle_start_dm(self, data: Dict) -> None:
@@ -161,6 +136,19 @@ class WebSocketEvents:
         # Присоединяемся к комнате для ЛС
         dm_room = f"user_{recipient_id}"
         join_room(dm_room)
+        
+        # ИСПРАВЛЕНО: Загружаем историю сообщений
+        try:
+            messages_data = MessageService.get_dm_messages(current_user.id, recipient_id, 20)
+            
+            # Отправляем историю переписки клиенту
+            emit('dm_history', {
+                'recipient_id': recipient_id,
+                'recipient_name': recipient.username,
+                'messages': messages_data
+            })
+        except Exception as e:
+            current_app.logger.error(f"Ошибка при загрузке истории ЛС: {e}")
         
         # Отправляем подтверждение
         emit('dm_started', {

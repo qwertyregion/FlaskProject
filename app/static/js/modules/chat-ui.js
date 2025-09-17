@@ -23,7 +23,7 @@ class ChatUI {
     }
 
     setupEventListeners() {
-        console.log('Настройка обработчиков событий');
+        console.log('🔵 [CHAT-UI DEBUG] Настройка обработчиков событий');
         // Обработчик перед закрытием страницы
         window.addEventListener('beforeunload', () => {
             window.isPageUnloading = true;
@@ -139,6 +139,7 @@ class ChatUI {
                 this.virtualizedChat.loadMoreBtn.style.display = 'none';
             }
 
+            // Присоединяемся к комнате
             window.socket.emit('join_room', { room: this.currentRoom });
 
             // Загружаем историю сообщений
@@ -149,6 +150,11 @@ class ChatUI {
     }
 
     switchToRoom(roomName) {
+        // Выходим из предыдущей комнаты если она отличается
+        if (this.currentRoom && this.currentRoom !== roomName && window.socket) {
+            window.socket.emit('leave_room', { room: this.currentRoom });
+        }
+        
         if (window.dmHandler) {
             window.dmHandler.isInDMMode = false;
             window.dmHandler.currentDMRecipient = null;
@@ -181,7 +187,7 @@ class ChatUI {
             this.virtualizedChat.loadMoreBtn.style.display = 'none';
         }
 
-        // Список пользователей придет от сервера после join_room
+        // Присоединяемся к новой комнате через initChat()
     }
 
     switchToRoomsTab() {
@@ -361,17 +367,55 @@ class ChatUI {
         this.updateOnlineCount();
     }
 
-    addNotification(text) {
+    addNotification(text, type = 'info') {
+        console.log(`🔵 [CLIENT DEBUG] addNotification вызван: "${text}", тип: ${type}`);
+        
         const chatBox = document.getElementById('chat-box');
-        if (!chatBox) return;
+        if (!chatBox) {
+            console.warn('🔴 [CLIENT DEBUG] Chat box не найден для уведомления');
+            return;
+        }
 
         const notification = document.createElement('div');
         notification.className = 'notification';
-        notification.style.color = 'gray';
-        notification.style.fontStyle = 'italic';
+        
+        // Настраиваем стили в зависимости от типа
+        switch (type) {
+            case 'error':
+                notification.style.color = '#dc3545';
+                notification.style.backgroundColor = '#f8d7da';
+                notification.style.border = '1px solid #f5c6cb';
+                notification.style.borderRadius = '4px';
+                notification.style.padding = '8px 12px';
+                notification.style.margin = '4px 0';
+                break;
+            case 'success':
+                notification.style.color = '#155724';
+                notification.style.backgroundColor = '#d4edda';
+                notification.style.border = '1px solid #c3e6cb';
+                notification.style.borderRadius = '4px';
+                notification.style.padding = '8px 12px';
+                notification.style.margin = '4px 0';
+                break;
+            case 'warning':
+                notification.style.color = '#856404';
+                notification.style.backgroundColor = '#fff3cd';
+                notification.style.border = '1px solid #ffeaa7';
+                notification.style.borderRadius = '4px';
+                notification.style.padding = '8px 12px';
+                notification.style.margin = '4px 0';
+                break;
+            default: // 'info'
+                notification.style.color = 'gray';
+                notification.style.fontStyle = 'italic';
+                break;
+        }
+        
         notification.textContent = text;
         chatBox.appendChild(notification);
         chatBox.scrollTop = chatBox.scrollHeight;
+        
+        console.log(`✅ [CLIENT DEBUG] Уведомление добавлено: "${text}"`);
     }
 
     updateOnlineCount() {
@@ -604,8 +648,12 @@ class ChatUI {
                 document.getElementById(`${tabId}-tab`).classList.add('active');
 
                 if (tabId === 'dms') {
+                    console.log('🔵 [CLIENT DEBUG] Клик на вкладку Личные сообщения');
                     if (window.dmHandler) {
+                        console.log('🔵 [CLIENT DEBUG] dmHandler найден, вызываем loadDMConversations');
                         window.dmHandler.loadDMConversations();
+                    } else {
+                        console.error('🔴 [CLIENT DEBUG] dmHandler не найден');
                     }
                 } else if (tabId === 'rooms') {
                     // Список комнат обновляется автоматически сервером

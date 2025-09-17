@@ -3,17 +3,23 @@ import uuid
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("REDIS_URL") is None,
-    reason="REDIS_URL не задан, пропускаем Redis-тесты",
-)
+# Проверяем Redis доступность динамически в фикстуре redis_client
+# pytestmark = pytest.mark.skipif(
+#     os.environ.get("REDIS_URL") is None,
+#     reason="REDIS_URL не задан, пропускаем Redis-тесты",
+# )
 
 
 @pytest.fixture(scope="module")
 def redis_client():
     import redis
+    from config import TestingConfig
 
-    url = os.environ.get("REDIS_URL")
+    # Используем TestingConfig для получения Redis URL
+    url = TestingConfig.REDIS_URL
+    if not url:
+        pytest.skip("Redis URL не настроен в TestingConfig")
+    
     client = redis.from_url(url, decode_responses=True)
     try:
         client.ping()
@@ -24,10 +30,11 @@ def redis_client():
 
 @pytest.fixture(scope="module")
 def flask_app_appctx():
-    # Минимальный Flask app context для current_app.logger внутри менеджеров
-    from flask import Flask
+    # Используем TestingConfig для Redis тестов
+    from app import create_app
+    from config import TestingConfig
 
-    app = Flask(__name__)
+    app = create_app(TestingConfig)
     with app.app_context():
         yield app
 

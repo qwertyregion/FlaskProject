@@ -62,11 +62,16 @@ class UserService:
     def get_dm_conversations(user_id: int) -> List[Dict[str, Any]]:
         """Получает список диалогов для пользователя"""
         try:
+            current_app.logger.info(f"🔵 [DM DEBUG] get_dm_conversations вызван для пользователя {user_id}")
+            
             conversations = []
             
             # Находим всех пользователей, с которыми есть переписка
             sent_messages = Message.query.filter_by(sender_id=user_id, is_dm=True).all()
             received_messages = Message.query.filter_by(recipient_id=user_id, is_dm=True).all()
+            
+            current_app.logger.info(f"🔵 [DM DEBUG] Найдено отправленных сообщений: {len(sent_messages)}")
+            current_app.logger.info(f"🔵 [DM DEBUG] Найдено полученных сообщений: {len(received_messages)}")
             
             # Собираем уникальных собеседников
             interlocutors: Set[int] = set()
@@ -75,6 +80,8 @@ class UserService:
                     interlocutors.add(msg.recipient_id)
             for msg in received_messages:
                 interlocutors.add(msg.sender_id)
+            
+            current_app.logger.info(f"🔵 [DM DEBUG] Найдено собеседников: {len(interlocutors)}")
             
             # Для каждого собеседника получаем информацию
             for interlocutor_id in interlocutors:
@@ -109,6 +116,7 @@ class UserService:
                 reverse=True
             )
             
+            current_app.logger.info(f"🔵 [DM DEBUG] Возвращаем {len(conversations)} диалогов")
             return conversations
         except Exception as e:
             current_app.logger.error(f"Failed to get DM conversations: {e}")

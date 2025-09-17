@@ -41,9 +41,8 @@ class RoomController:
                 return jsonify({
                     'id': room.id,
                     'name': room.name,
-                    'description': room.description,
-                    'creator_id': room.creator_id,
-                    'creator_username': room.creator.username if room.creator else 'Unknown',
+                    'created_by': room.created_by,  # ИСПРАВЛЕНО: используем created_by
+                    'creator_username': room.creator_obj.username if room.creator_obj else 'Unknown',  # ИСПРАВЛЕНО: используем creator_obj
                     'is_private': room.is_private,
                     'created_at': room.created_at.isoformat() if room.created_at else None
                 })
@@ -64,9 +63,8 @@ class RoomController:
                 return jsonify({
                     'id': room.id,
                     'name': room.name,
-                    'description': room.description,
-                    'creator_id': room.creator_id,
-                    'creator_username': room.creator.username if room.creator else 'Unknown',
+                    'created_by': room.created_by,  # ИСПРАВЛЕНО: используем created_by
+                    'creator_username': room.creator_obj.username if room.creator_obj else 'Unknown',  # ИСПРАВЛЕНО: используем creator_obj
                     'is_private': room.is_private,
                     'created_at': room.created_at.isoformat() if room.created_at else None
                 })
@@ -91,11 +89,10 @@ class RoomController:
                 if not name:
                     return jsonify({'error': 'Название комнаты обязательно'}), 400
                 
-                # Создаем комнату
+                # Создаем комнату (БЕЗ description - его нет в модели)
                 room = RoomService.create_room(
                     name=name,
                     creator_id=current_user.id,
-                    description=description,
                     is_private=is_private
                 )
                 
@@ -103,8 +100,7 @@ class RoomController:
                     return jsonify({
                         'id': room.id,
                         'name': room.name,
-                        'description': room.description,
-                        'creator_id': room.creator_id,
+                        'created_by': room.created_by,  # ИСПРАВЛЕНО: используем created_by
                         'is_private': room.is_private,
                         'created_at': room.created_at.isoformat() if room.created_at else None
                     }), 201
